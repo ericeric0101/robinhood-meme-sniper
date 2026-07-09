@@ -1,5 +1,8 @@
-from pydantic import BaseModel, Field
+from __future__ import annotations
+
 from typing import Any
+
+from pydantic import BaseModel, Field
 
 
 class RawEvent(BaseModel):
@@ -19,7 +22,7 @@ class RawEvent(BaseModel):
 class CandidateToken(BaseModel):
     cluster_id: str
     contract_address: str
-    chain: str = 'robinhood'
+    chain: str = "robinhood"
     symbol: str | None = None
     name: str | None = None
     pair_address: str | None = None
@@ -38,4 +41,17 @@ class CandidateToken(BaseModel):
     market_score: float = 0.0
     hype_score: float = 0.0
     alert_score: float = 0.0
-    verdict: str = 'watch'
+    verdict: str = "watch"
+
+
+class NarrativeCluster(BaseModel):
+    cluster_id: str
+    canonical_name: str
+    aliases: list[str] = Field(default_factory=list)
+    related_contracts: list[str] = Field(default_factory=list)
+    related_pairs: list[str] = Field(default_factory=list)
+    related_handles: list[str] = Field(default_factory=list)
+    events: list[RawEvent] = Field(default_factory=list)
+    candidates: list[CandidateToken] = Field(default_factory=list)
+    canonical_candidate: CandidateToken | None = None
+    status: str = "unknown"
