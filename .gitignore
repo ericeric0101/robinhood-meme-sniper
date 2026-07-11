@@ -9,4 +9,7 @@ outputs/
 data/raw/
 data/cache/
 logs/
+build/
+dist/
+*.egg-info/
 .DS_Store

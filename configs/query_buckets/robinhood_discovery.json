@@ -1,0 +1,80 @@
+{
+  "name": "robinhood-discovery",
+  "actor_id": "xtdata~twitter-x-scraper",
+  "notes": [
+    "Designed for controlled broad scanning: seed accounts plus narrative keyword buckets.",
+    "Pair filters are conservative and meant to reduce obvious Dex contamination, not replace authenticity scoring."
+  ],
+  "pair_deny_terms": [
+    "pepe",
+    "wallet",
+    "cto"
+  ],
+  "account_query_templates": [
+    {
+      "id_prefix": "acct-rh-latest",
+      "query_template": "from:{handle} robinhood",
+      "sort": "Latest",
+      "max_items": 8
+    },
+    {
+      "id_prefix": "acct-office-cat",
+      "query_template": "from:{handle} \"office cat\"",
+      "sort": "Latest",
+      "max_items": 8,
+      "pair_allow_terms": [
+        "office cat"
+      ]
+    },
+    {
+      "id_prefix": "acct-cashcat",
+      "query_template": "from:{handle} cashcat",
+      "sort": "Latest",
+      "max_items": 8,
+      "pair_allow_terms": [
+        "cash cat",
+        "cashcat"
+      ],
+      "pair_deny_terms": [
+        "baby",
+        "pepe",
+        "wallet"
+      ]
+    }
+  ],
+  "keyword_queries": [
+    {
+      "id": "cashcat-robinhood",
+      "query": "cashcat robinhood",
+      "sort": "Latest",
+      "max_items": 8,
+      "pair_allow_terms": [
+        "cash cat",
+        "cashcat"
+      ],
+      "pair_deny_terms": [
+        "baby",
+        "pepe",
+        "wallet"
+      ]
+    },
+    {
+      "id": "office-cat-robinhood",
+      "query": "\"office cat\" robinhood",
+      "sort": "Latest",
+      "max_items": 8,
+      "pair_allow_terms": [
+        "office cat"
+      ]
+    },
+    {
+      "id": "robinhood-office-cat-exact",
+      "query": "\"Robinhood Office Cat\"",
+      "sort": "Top",
+      "max_items": 8,
+      "pair_allow_terms": [
+        "office cat"
+      ]
+    }
+  ]
+}

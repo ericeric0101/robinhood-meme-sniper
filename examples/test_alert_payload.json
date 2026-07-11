@@ -1,0 +1,31 @@
+{
+  "tweets": [
+    {
+      "id": "test-tweet-1",
+      "text": "TEST Canary Robinhood Office Cat CA 0x1111111111111111111111111111111111111111",
+      "createdAt": "2026-07-09T01:18:00Z",
+      "author": {"userName": "test_kol_alpha"},
+      "url": "https://x.com/test/status/1",
+      "likeCount": 200,
+      "retweetCount": 25,
+      "replyCount": 10,
+      "quoteCount": 5
+    }
+  ],
+  "pairs": [
+    {
+      "pairAddress": "pair-test-real",
+      "chainId": "robinhood",
+      "baseToken": {
+        "address": "0x1111111111111111111111111111111111111111",
+        "name": "TEST Canary Robinhood Office Cat",
+        "symbol": "TCOC"
+      },
+      "url": "https://dexscreener.com/robinhood/pair-test-real",
+      "pairCreatedAt": 1783560000000,
+      "liquidity": {"usd": 25000},
+      "volume": {"h24": 200000, "h1": 25000},
+      "txns": {"h1": {"buys": 200, "sells": 160}}
+    }
+  ]
+}

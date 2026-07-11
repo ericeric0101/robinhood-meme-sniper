@@ -1,0 +1,77 @@
+{
+  "name": "xtdata-low-frequency-prototype",
+  "actor_id": "xtdata~twitter-x-scraper",
+  "notes": [
+    "Designed for low-frequency prototype runs only.",
+    "Keep max_items small because xtdata may overfetch upstream; pipeline caps downstream records.",
+    "Do not treat this pack as a production polling schedule."
+  ],
+  "pair_allow_terms": [
+    "cash cat",
+    "office cat"
+  ],
+  "pair_deny_terms": [
+    "wallet",
+    "pepe"
+  ],
+  "queries": [
+    {
+      "id": "office-cat-broad",
+      "query": "office cat",
+      "sort": "Latest",
+      "max_items": 5,
+      "goal": "Broad recall for current office-cat discussion and immediate noise profile.",
+      "pair_allow_terms": [
+        "office cat"
+      ],
+      "pair_deny_terms": [
+        "wallet",
+        "pepe"
+      ]
+    },
+    {
+      "id": "office-cat-robinhood",
+      "query": "\"office cat\" robinhood",
+      "sort": "Latest",
+      "max_items": 5,
+      "goal": "Bias toward Robinhood-linked office-cat narrative.",
+      "pair_allow_terms": [
+        "office cat"
+      ],
+      "pair_deny_terms": [
+        "wallet",
+        "pepe"
+      ]
+    },
+    {
+      "id": "cashcat-robinhood",
+      "query": "cashcat robinhood",
+      "sort": "Latest",
+      "max_items": 5,
+      "goal": "Check whether CashCat/Robinhood chatter yields more ticker-like signal than generic office cat.",
+      "pair_allow_terms": [
+        "cash cat",
+        "cashcat"
+      ],
+      "pair_deny_terms": [
+        "baby",
+        "pepe"
+      ]
+    },
+    {
+      "id": "robinhood-office-cat-exact",
+      "query": "\"Robinhood Office Cat\"",
+      "sort": "Top",
+      "max_items": 5,
+      "goal": "High-precision exact-match prototype query for canonical narrative wording.",
+      "pair_allow_terms": [
+        "office cat"
+      ],
+      "pair_deny_terms": [
+        "compliance",
+        "wallet",
+        "pepe"
+      ]
+    }
+  ]
+}

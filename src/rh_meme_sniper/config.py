@@ -15,7 +15,7 @@ class Settings(BaseModel):
     sqlite_path: Path = Path(os.getenv('SQLITE_PATH', './data/state.db'))
     poll_interval_seconds: int = int(os.getenv('POLL_INTERVAL_SECONDS', '180'))
     apify_api_token: str | None = os.getenv('APIFY_API_TOKEN')
-    apify_x_actor_id: str = os.getenv('APIFY_X_ACTOR_ID', '61RPP7dywgiy0JPD0')
+    apify_x_actor_id: str = os.getenv('APIFY_X_ACTOR_ID', 'xtdata~twitter-x-scraper')
     x_app_name: str | None = os.getenv('X_APP_NAME')
     x_client_id: str | None = os.getenv('X_CLIENT_ID')
     x_client_secret: str | None = os.getenv('X_CLIENT_SECRET')

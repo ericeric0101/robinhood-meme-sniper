@@ -1,0 +1,18 @@
+{
+  "name": "robinhood-seed-accounts",
+  "notes": [
+    "Seed watchlist derived from the repo's low-frequency prototype outputs.",
+    "Primary accounts are the first ones to monitor for Robinhood-native meme narrative discovery.",
+    "Secondary accounts are lower-confidence expansions and should be treated as supporting signal only."
+  ],
+  "primary_accounts": [
+    "jiggacapital",
+    "DoxxedChannel",
+    "dexevents_miu"
+  ],
+  "secondary_accounts": [
+    "Tribalcyrpto",
+    "MogOfWallstreet",
+    "Mavericks100xs"
+  ]
+}
