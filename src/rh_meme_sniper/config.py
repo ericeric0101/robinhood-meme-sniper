@@ -13,6 +13,14 @@ class Settings(BaseModel):
     data_dir: Path = Path(os.getenv('DATA_DIR', './data'))
     output_dir: Path = Path(os.getenv('OUTPUT_DIR', './outputs'))
     sqlite_path: Path = Path(os.getenv('SQLITE_PATH', './data/state.db'))
+    tracking_db_path: Path = Path(os.getenv('TRACKING_DB_PATH', './data/tracking.db'))
+    tracking_retention_days: int = int(os.getenv('TRACKING_RETENTION_DAYS', '180'))
+    tracking_drop_stale_tokens_days: int | None = int(os.getenv('TRACKING_DROP_STALE_TOKENS_DAYS')) if os.getenv('TRACKING_DROP_STALE_TOKENS_DAYS') else None
+    tracking_judge_enabled: bool = os.getenv('TRACKING_JUDGE_ENABLED', 'false').lower() in {'1', 'true', 'yes', 'on'}
+    tracking_judge_endpoint: str | None = os.getenv('TRACKING_JUDGE_ENDPOINT')
+    tracking_judge_api_key: str | None = os.getenv('TRACKING_JUDGE_API_KEY')
+    tracking_judge_model: str | None = os.getenv('TRACKING_JUDGE_MODEL')
+    tracking_judge_timeout_seconds: int = int(os.getenv('TRACKING_JUDGE_TIMEOUT_SECONDS', '30'))
     poll_interval_seconds: int = int(os.getenv('POLL_INTERVAL_SECONDS', '180'))
     x_provider: str = os.getenv('X_PROVIDER', 'apify')
     apify_api_token: str | None = os.getenv('APIFY_API_TOKEN')

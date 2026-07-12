@@ -91,6 +91,26 @@ Notes:
 - `Latest + Top` currently degrades to `Latest` for this provider
 - `run-alert-loop` now reports `provider` and `usage_summary` (balance before/after + estimated credits used when available)
 
+### Optional env for tracking DB + LLM judge
+```env
+TRACKING_DB_PATH=./data/tracking.db
+TRACKING_RETENTION_DAYS=180
+# optional; leave blank at first
+TRACKING_DROP_STALE_TOKENS_DAYS=
+
+TRACKING_JUDGE_ENABLED=true
+TRACKING_JUDGE_ENDPOINT=https://api.openai.com/v1/chat/completions
+TRACKING_JUDGE_API_KEY=...
+TRACKING_JUDGE_MODEL=gpt-4.1-mini
+TRACKING_JUDGE_TIMEOUT_SECONDS=30
+```
+
+Notes:
+- The LLM judge is **optional**. If disabled or unavailable, the repo falls back to the built-in rule-based judge.
+- Start with a **cheap model** first. This task is classification / denoise / ranking, not long-form generation.
+- Recommended first choice: `gpt-4.1-mini` if your endpoint supports it. If not, another cheap OpenAI-compatible mini model is fine.
+- For security, it is better that **you put the key into your local `.env` yourself** rather than pasting the raw secret into chat.
+
 ### Additional env for Telegram delivery
 ```env
 TELEGRAM_BOT_TOKEN=...

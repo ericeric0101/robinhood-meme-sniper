@@ -1,4 +1,6 @@
 import json
+import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from rh_meme_sniper.extract.ca_parser import extract_contract_addresses, extract_urls
@@ -11,6 +13,7 @@ from rh_meme_sniper.cli import app
 from rh_meme_sniper.pipeline import filter_pair_items, run_alert_loop_from_payload
 from rh_meme_sniper.sources.apify_client import ApifyRunResult, ApifyClient
 from rh_meme_sniper.sources.x_source import get_x_provider, TwitterAPIIOProvider
+from rh_meme_sniper.models import CandidateToken, NarrativeCluster, RawEvent
 
 from typer.testing import CliRunner
 
@@ -381,6 +384,95 @@ def test_run_live_alert_loop_uses_selected_provider(monkeypatch, tmp_path):
     assert artifacts.alert_count == 1
 
 
+def test_run_live_alert_loop_requires_tweet_match_for_account_probe(monkeypatch, tmp_path):
+    from rh_meme_sniper.pipeline import run_live_alert_loop
+
+    real_ca = '0x020bfC650A365f8BB26819deAAbF3E21291018b4'
+
+    class FakeProvider:
+        provider_name = 'twitterapiio'
+
+        def search_tweets(self, *, query, max_items, sort, tweet_language):
+            return []
+
+    monkeypatch.setattr('rh_meme_sniper.pipeline.get_x_provider', lambda provider_name=None, actor_id=None: FakeProvider())
+    monkeypatch.setattr('rh_meme_sniper.pipeline._fetch_pairs', lambda query_terms, chain_id=None, limit_per_query=5: [
+        {
+            'pairAddress': 'pair-real',
+            'chainId': 'robinhood',
+            'baseToken': {'address': real_ca, 'name': 'Cash Cat', 'symbol': 'CASHCAT'},
+            'url': 'https://dexscreener.com/robinhood/pair-real',
+            'pairCreatedAt': 1783560000000,
+            'liquidity': {'usd': 25000},
+            'volume': {'h24': 200000, 'h1': 25000},
+            'txns': {'h1': {'buys': 200, 'sells': 160}},
+        }
+    ])
+
+    artifacts = run_live_alert_loop(
+        query='from:vladtenev cashcat',
+        max_items=5,
+        sort='Latest',
+        output_dir=tmp_path,
+        send_telegram=False,
+        require_tweet_match_for_alerts=True,
+    )
+
+    assert artifacts.tweet_count == 0
+    assert artifacts.pair_count == 0
+    assert artifacts.alert_count == 0
+
+
+def test_run_live_alert_loop_filters_stale_tweets_for_account_probe(monkeypatch, tmp_path):
+    from rh_meme_sniper.pipeline import run_live_alert_loop
+
+    real_ca = '0xD7321801CAae694090694Ff55A9323139F043B88'
+
+    class FakeProvider:
+        provider_name = 'twitterapiio'
+
+        def search_tweets(self, *, query, max_items, sort, tweet_language):
+            return [
+                {
+                    'id': 'tweet-old',
+                    'text': 'the juggernaut',
+                    'createdAt': '2025-05-24T07:04:00Z',
+                    'author': {'userName': 'vladtenev'},
+                    'url': 'https://x.com/vladtenev/status/1',
+                    'likeCount': 1,
+                    'retweetCount': 0,
+                }
+            ]
+
+    monkeypatch.setattr('rh_meme_sniper.pipeline.get_x_provider', lambda provider_name=None, actor_id=None: FakeProvider())
+    monkeypatch.setattr('rh_meme_sniper.pipeline._fetch_pairs', lambda query_terms, chain_id=None, limit_per_query=5: [
+        {
+            'pairAddress': 'pair-real',
+            'chainId': 'robinhood',
+            'baseToken': {'address': real_ca, 'name': 'The Juggernaut', 'symbol': 'JUGGERNAUT'},
+            'url': 'https://dexscreener.com/robinhood/pair-real',
+            'pairCreatedAt': 1783560000000,
+            'liquidity': {'usd': 25000},
+            'volume': {'h24': 200000, 'h1': 25000},
+            'txns': {'h1': {'buys': 200, 'sells': 160}},
+        }
+    ])
+
+    artifacts = run_live_alert_loop(
+        query='from:vladtenev juggernaut',
+        max_items=5,
+        sort='Latest',
+        output_dir=tmp_path,
+        send_telegram=False,
+        require_tweet_match_for_alerts=True,
+        max_tweet_age_days=30,
+    )
+
+    assert artifacts.tweet_count == 0
+    assert artifacts.pair_count == 0
+    assert artifacts.alert_count == 0
+
+
 def test_twitterapiio_provider_uses_advanced_search_and_paginates(monkeypatch):
     calls = []
 
@@ -653,6 +745,27 @@ def test_cli_run_alert_loop_includes_provider_usage_summary(monkeypatch):
     assert '"recharge_credits": 700' in result.stdout
 
 
+def test_run_alert_loop_tolerates_balance_lookup_failure(monkeypatch):
+    from rh_meme_sniper.pipeline import run_live_alert_loop
+
+    class FakeProvider:
+        provider_name = 'twitterapiio'
+
+        def search_tweets(self, **kwargs):
+            return []
+
+        def get_account_balance(self):
+            raise RuntimeError('balance endpoint timeout')
+
+    monkeypatch.setattr('rh_meme_sniper.pipeline.get_x_provider', lambda actor_id=None: FakeProvider())
+    monkeypatch.setattr('rh_meme_sniper.pipeline._fetch_pairs', lambda *args, **kwargs: [])
+
+    artifacts = run_live_alert_loop(query='cashcat robinhood', max_items=2, send_telegram=False)
+
+    assert artifacts.tweet_count == 0
+    assert artifacts.usage_summary is None
+
+
 def test_run_alert_loop_from_payload_suppresses_duplicate_alerts_with_seen_state(tmp_path):
     real_ca = '0x1111111111111111111111111111111111111111'
     payload = {
@@ -716,7 +829,7 @@ def test_run_discovery_executes_watchlist_and_bucket_queries(monkeypatch, tmp_pa
     query_buckets_path = tmp_path / 'query-buckets.json'
     query_buckets_path.write_text(json.dumps({
         'account_query_templates': [
-            {'id_prefix': 'acct-rh', 'query_template': 'from:{handle} robinhood', 'sort': 'Latest', 'max_items': 5},
+            {'id_prefix': 'acct-rh', 'query_template': 'from:{handle} robinhood', 'sort': 'Latest', 'max_items': 5, 'require_tweet_match_for_alerts': True, 'max_tweet_age_days': 14},
         ],
         'keyword_queries': [
             {'id': 'cashcat', 'query': 'cashcat robinhood', 'sort': 'Top', 'max_items': 8},
@@ -753,6 +866,8 @@ def test_run_discovery_executes_watchlist_and_bucket_queries(monkeypatch, tmp_pa
     assert calls[1]['query'] == 'from:DoxxedChannel robinhood'
     assert calls[2]['query'] == 'cashcat robinhood'
     assert all(call['pair_deny_terms'] == ['pepe'] for call in calls)
+    assert calls[0]['require_tweet_match_for_alerts'] is True
+    assert calls[0]['max_tweet_age_days'] == 14
 
 
 def test_cli_run_discovery_executes_configs(monkeypatch, tmp_path):
@@ -775,3 +890,505 @@ def test_cli_run_discovery_executes_configs(monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     assert 'cashcat robinhood' in result.stdout
+
+
+def test_run_query_pack_records_tracking_state(monkeypatch, tmp_path):
+    from rh_meme_sniper.pipeline import run_query_pack
+
+    pack_path = tmp_path / 'query-pack.json'
+    pack_path.write_text(json.dumps({
+        'queries': [
+            {'id': 'cashcat', 'query': 'cashcat robinhood', 'sort': 'Latest', 'max_items': 5},
+        ],
+    }))
+    tracking_db_path = tmp_path / 'tracking.db'
+
+    candidate = CandidateToken(
+        cluster_id='cash-cat',
+        contract_address='0x020bfC650A365f8BB26819deAAbF3E21291018b4',
+        symbol='CASHCAT',
+        name='Cash Cat',
+        pair_address='pair-real',
+        pair_created_at='2026-06-18T20:01:25Z',
+        first_seen_x_at='2026-07-12T08:17:17Z',
+        first_seen_ca_at='2026-07-12T08:17:17Z',
+        first_seen_market_at='2026-07-12T08:17:17Z',
+        first_kol_mentions=['robinhooddailys'],
+        liquidity_usd=1000,
+        volume_1h=200,
+        volume_24h=5000,
+        buy_count_1h=10,
+        sell_count_1h=3,
+        authenticity_score=95,
+        timing_score=80,
+        market_score=100,
+        hype_score=30,
+        alert_score=88,
+        verdict='alert',
+    )
+
+    def fake_run_live_alert_loop(**kwargs):
+        class Artifacts:
+            tweet_count = 1
+            pair_count = 1
+            cluster_count = 1
+            alert_count = 1
+            output_paths = {'alerts': 'outputs/cashcat.log'}
+            alerts = ['alert text']
+            provider_name = 'twitterapiio'
+            usage_summary = None
+            clusters = [
+                NarrativeCluster(
+                    cluster_id='cash-cat',
+                    canonical_name='Cash Cat',
+                    related_contracts=[candidate.contract_address],
+                    related_pairs=['pair-real'],
+                    related_handles=['robinhooddailys'],
+                    events=[
+                        RawEvent(
+                            source='x',
+                            source_id='tweet-1',
+                            observed_at='2026-07-12T08:17:17Z',
+                            author_handle='robinhooddailys',
+                            text='Cash Cat $CASHCAT 0x020bfC650A365f8BB26819deAAbF3E21291018b4',
+                            contract_addresses=[candidate.contract_address],
+                        )
+                    ],
+                    candidates=[candidate],
+                    canonical_candidate=candidate,
+                    status='likely_canonical',
+                )
+            ]
+
+        return Artifacts()
+
+    monkeypatch.setattr('rh_meme_sniper.pipeline.run_live_alert_loop', fake_run_live_alert_loop)
+
+    results = run_query_pack(
+        query_pack_path=pack_path,
+        send_telegram=False,
+        tracking_db_path=tracking_db_path,
+    )
+
+    assert len(results.runs) == 1
+
+    import sqlite3
+    with sqlite3.connect(tracking_db_path) as conn:
+        tracked = conn.execute('SELECT contract_address, symbol, query FROM tracked_tokens').fetchall()
+        mentions = conn.execute('SELECT source_id, author_handle, query FROM mentions').fetchall()
+        snapshots = conn.execute('SELECT contract_address, liquidity_usd, volume_1h FROM market_snapshots').fetchall()
+
+    assert tracked == [('0x020bfC650A365f8BB26819deAAbF3E21291018b4', 'CASHCAT', 'cashcat robinhood')]
+    assert mentions == [('tweet-1', 'robinhooddailys', 'cashcat robinhood')]
+    assert snapshots == [('0x020bfC650A365f8BB26819deAAbF3E21291018b4', 1000.0, 200.0)]
+
+
+def test_rescan_tracked_tokens_reads_tracking_db_and_refreshes_snapshots(tmp_path, monkeypatch):
+    from rh_meme_sniper.pipeline import rescan_tracked_tokens
+    from rh_meme_sniper.state import TrackingState
+
+    tracking_db_path = tmp_path / 'tracking.db'
+    state = TrackingState(tracking_db_path)
+    state.record_candidate(
+        query='cashcat robinhood',
+        candidate=CandidateToken(
+            cluster_id='cash-cat',
+            contract_address='0x020bfC650A365f8BB26819deAAbF3E21291018b4',
+            symbol='CASHCAT',
+            name='Cash Cat',
+            pair_address='pair-old',
+            liquidity_usd=1000,
+            volume_1h=200,
+            volume_24h=5000,
+            buy_count_1h=10,
+            sell_count_1h=3,
+            authenticity_score=95,
+            timing_score=80,
+            market_score=100,
+            hype_score=30,
+            alert_score=88,
+            verdict='alert',
+        ),
+        cluster=NarrativeCluster(cluster_id='cash-cat', canonical_name='Cash Cat'),
+    )
+
+    monkeypatch.setattr('rh_meme_sniper.pipeline._fetch_pairs', lambda query_terms, chain_id=None, limit_per_query=5: [
+        {
+            'pairAddress': 'pair-new',
+            'chainId': 'robinhood',
+            'baseToken': {'address': '0x020bfC650A365f8BB26819deAAbF3E21291018b4', 'name': 'Cash Cat', 'symbol': 'CASHCAT'},
+            'url': 'https://dexscreener.com/robinhood/pair-new',
+            'pairCreatedAt': 1783560000000,
+            'liquidity': {'usd': 2222},
+            'volume': {'h24': 8888, 'h1': 333},
+            'txns': {'h1': {'buys': 20, 'sells': 5}},
+        }
+    ])
+
+    results = rescan_tracked_tokens(tracking_db_path=tracking_db_path)
+
+    assert results['tracked_token_count'] == 1
+    assert results['rescanned_count'] == 1
+    assert results['runs'][0]['contract_address'] == '0x020bfC650A365f8BB26819deAAbF3E21291018b4'
+    assert results['runs'][0]['liquidity_usd'] == 2222.0
+
+    import sqlite3
+    with sqlite3.connect(tracking_db_path) as conn:
+        latest = conn.execute(
+            'SELECT contract_address, pair_address, liquidity_usd, volume_1h FROM market_snapshots ORDER BY id DESC LIMIT 1'
+        ).fetchone()
+
+    assert latest == ('0x020bfC650A365f8BB26819deAAbF3E21291018b4', 'pair-new', 2222.0, 333.0)
+
+
+def test_tracking_state_prune_removes_old_mentions_and_snapshots_but_keeps_tracked_tokens(tmp_path):
+    from rh_meme_sniper.state import TrackingState
+
+    tracking_db_path = tmp_path / 'tracking.db'
+    state = TrackingState(tracking_db_path)
+    candidate = CandidateToken(
+        cluster_id='cash-cat',
+        contract_address='0x020bfC650A365f8BB26819deAAbF3E21291018b4',
+        symbol='CASHCAT',
+        name='Cash Cat',
+        pair_address='pair-old',
+        liquidity_usd=1000,
+        volume_1h=200,
+        volume_24h=5000,
+        buy_count_1h=10,
+        sell_count_1h=3,
+        authenticity_score=95,
+        timing_score=80,
+        market_score=100,
+        hype_score=30,
+        alert_score=88,
+        verdict='alert',
+    )
+    state.record_candidate(query='cashcat robinhood', candidate=candidate, cluster=NarrativeCluster(cluster_id='cash-cat', canonical_name='Cash Cat'))
+    state.record_mention(
+        query='cashcat robinhood',
+        contract_address=candidate.contract_address,
+        event=RawEvent(source='x', source_id='tweet-1', observed_at='2026-07-12T08:17:17Z', author_handle='robinhooddailys', text='Cash Cat'),
+    )
+
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=200)).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+    with sqlite3.connect(tracking_db_path) as conn:
+        conn.execute("UPDATE mentions SET created_at = ?", (old_ts,))
+        conn.execute("UPDATE market_snapshots SET captured_at = ?", (old_ts,))
+        conn.execute("UPDATE tracked_tokens SET last_updated_at = ?", (old_ts,))
+
+    summary = state.prune(retention_days=180)
+
+    assert summary['deleted_mentions'] == 1
+    assert summary['deleted_market_snapshots'] == 1
+    assert summary['deleted_tracked_tokens'] == 0
+    with sqlite3.connect(tracking_db_path) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM tracked_tokens').fetchone()[0] == 1
+        assert conn.execute('SELECT COUNT(*) FROM mentions').fetchone()[0] == 0
+        assert conn.execute('SELECT COUNT(*) FROM market_snapshots').fetchone()[0] == 0
+
+
+def test_cli_prune_tracking_db_outputs_summary(tmp_path):
+    from rh_meme_sniper.state import TrackingState
+
+    tracking_db_path = tmp_path / 'tracking.db'
+    state = TrackingState(tracking_db_path)
+    candidate = CandidateToken(
+        cluster_id='cash-cat',
+        contract_address='0x020bfC650A365f8BB26819deAAbF3E21291018b4',
+        symbol='CASHCAT',
+        name='Cash Cat',
+        pair_address='pair-old',
+        liquidity_usd=1000,
+        volume_1h=200,
+        volume_24h=5000,
+        buy_count_1h=10,
+        sell_count_1h=3,
+        verdict='alert',
+    )
+    state.record_candidate(query='cashcat robinhood', candidate=candidate, cluster=NarrativeCluster(cluster_id='cash-cat', canonical_name='Cash Cat'))
+    with sqlite3.connect(tracking_db_path) as conn:
+        conn.execute(
+            "UPDATE market_snapshots SET captured_at = ?",
+            (((datetime.now(timezone.utc) - timedelta(days=190)).replace(microsecond=0).isoformat().replace('+00:00', 'Z')),),
+        )
+
+    result = runner.invoke(app, ['prune-tracking-db', str(tracking_db_path), '--retention-days', '180'])
+
+    assert result.exit_code == 0
+    assert '"deleted_market_snapshots": 1' in result.stdout
+
+
+def test_rule_judge_marks_generic_broad_candidate_as_ignore():
+    from rh_meme_sniper.pipeline import judge_candidate_tracking_status
+
+    candidate = CandidateToken(
+        cluster_id='favorite-meme',
+        contract_address='0x79Fe86b963255Ce884bdcaC6388C50a599Ba277f',
+        symbol='ROBINHOOD',
+        name='Robinhood',
+        liquidity_usd=2000,
+        volume_1h=100,
+        volume_24h=500,
+        verdict='watch',
+    )
+
+    status, reason = judge_candidate_tracking_status(
+        query='"favorite meme" robinhood',
+        candidate=candidate,
+        cluster=NarrativeCluster(cluster_id='favorite-meme', canonical_name='Robinhood'),
+    )
+
+    assert status == 'ignore'
+    assert reason == 'generic_or_brand_term'
+
+
+def test_rule_judge_marks_specific_ca_candidate_as_strong_candidate():
+    from rh_meme_sniper.pipeline import judge_candidate_tracking_status
+
+    candidate = CandidateToken(
+        cluster_id='cash-cat',
+        contract_address='0x020bfC650A365f8BB26819deAAbF3E21291018b4',
+        symbol='CASHCAT',
+        name='Cash Cat',
+        first_seen_ca_at='2026-07-12T08:17:17Z',
+        liquidity_usd=12000,
+        volume_1h=2500,
+        volume_24h=30000,
+        buy_count_1h=30,
+        sell_count_1h=10,
+        alert_score=88,
+        verdict='alert',
+    )
+
+    status, reason = judge_candidate_tracking_status(
+        query='cashcat robinhood',
+        candidate=candidate,
+        cluster=NarrativeCluster(cluster_id='cash-cat', canonical_name='Cash Cat'),
+    )
+
+    assert status == 'strong_candidate'
+    assert reason in {'high_signal_candidate', 'canonical_exact_match_boost'}
+
+
+def test_rule_judge_applies_canonical_exact_match_boost_for_exact_query_match():
+    from rh_meme_sniper.pipeline import judge_candidate_tracking_status
+
+    candidate = CandidateToken(
+        cluster_id='cash-cat',
+        contract_address='0x020bfC650A365f8BB26819deAAbF3E21291018b4',
+        symbol='CASHCAT',
+        name='Cash Cat',
+        first_seen_ca_at='2026-07-12T08:17:17Z',
+        liquidity_usd=9000,
+        volume_24h=22000,
+        authenticity_score=95,
+        market_score=97,
+        alert_score=72,
+        verdict='watch',
+    )
+
+    status, reason = judge_candidate_tracking_status(
+        query='cashcat robinhood',
+        candidate=candidate,
+        cluster=NarrativeCluster(cluster_id='cash-cat', canonical_name='Cash Cat'),
+    )
+
+    assert status == 'strong_candidate'
+    assert reason == 'canonical_exact_match_boost'
+
+
+def test_rule_judge_keeps_babycashcat_as_watch_not_ignore():
+    from rh_meme_sniper.pipeline import judge_candidate_tracking_status
+
+    candidate = CandidateToken(
+        cluster_id='cash-cat',
+        contract_address='0x57a1AB439e8C24B90Ecc6534C05621d6E68ED35A',
+        symbol='BABYCASHCAT',
+        name='Baby Cash Cat',
+        first_seen_market_at='2026-07-12T08:17:17Z',
+        liquidity_usd=39000,
+        volume_24h=296000,
+        verdict='watch',
+    )
+
+    status, reason = judge_candidate_tracking_status(
+        query='cashcat robinhood',
+        candidate=candidate,
+        cluster=NarrativeCluster(cluster_id='cash-cat', canonical_name='Cash Cat'),
+    )
+
+    assert status == 'watch'
+    assert reason in {'has_contract_signal', 'derivative_variant'}
+    assert reason != 'canonical_exact_match_boost'
+
+
+def test_rule_judge_ignores_extracted_tweet_blob_as_name():
+    from rh_meme_sniper.pipeline import judge_candidate_tracking_status
+
+    candidate = CandidateToken(
+        cluster_id='cash-cat',
+        contract_address='0xC070B017da80D71b102971232BD885252c64394f',
+        name='$CASHCAT $ARROW delivered an 88x return 🚀 now ChillHood is next. On Robinhood CA 0xC070B017da80D71b102971232BD885252c64394f',
+        first_seen_ca_at='2026-07-12T08:17:17Z',
+        verdict='watch',
+    )
+
+    status, reason = judge_candidate_tracking_status(
+        query='cashcat robinhood',
+        candidate=candidate,
+        cluster=NarrativeCluster(cluster_id='cash-cat', canonical_name='Cash Cat'),
+    )
+
+    assert status == 'ignore'
+    assert reason == 'garbage_extracted_name'
+
+
+def test_rule_judge_ignores_generic_robinhood_brand_derivative():
+    from rh_meme_sniper.pipeline import judge_candidate_tracking_status
+
+    candidate = CandidateToken(
+        cluster_id='favorite-meme',
+        contract_address='0x94FEf3763ED87051267dCd7FfC5DF416B6C03a7E',
+        symbol='RPP402',
+        name='Robinhood Payments Protocol',
+        first_seen_market_at='2026-07-12T08:17:17Z',
+        liquidity_usd=29982,
+        volume_24h=36388,
+        verdict='alert',
+        alert_score=87,
+    )
+
+    status, reason = judge_candidate_tracking_status(
+        query='"favorite meme" robinhood',
+        candidate=candidate,
+        cluster=NarrativeCluster(cluster_id='favorite-meme', canonical_name='Robinhood Payments Protocol'),
+    )
+
+    assert status == 'ignore'
+    assert reason == 'generic_robinhood_brand_derivative'
+
+
+def test_apply_tracking_judge_keeps_hard_ignore_guardrail_over_llm_override():
+    from rh_meme_sniper.pipeline import apply_tracking_judge
+
+    class TooPermissiveJudge:
+        def judge(self, *, query, candidate, cluster):
+            return {'status': 'watch', 'reason': 'llm_override'}
+
+    candidate = CandidateToken(
+        cluster_id='favorite-meme',
+        contract_address='0x94FEf3763ED87051267dCd7FfC5DF416B6C03a7E',
+        symbol='WALLET',
+        name='Robinhood Wallet',
+        first_seen_market_at='2026-07-12T08:17:17Z',
+        liquidity_usd=29982,
+        volume_24h=36388,
+        verdict='alert',
+        alert_score=87,
+    )
+
+    status, reason = apply_tracking_judge(
+        query='"favorite meme" robinhood',
+        candidate=candidate,
+        cluster=NarrativeCluster(cluster_id='favorite-meme', canonical_name='Robinhood Wallet'),
+        llm_judge=TooPermissiveJudge(),
+    )
+
+    assert status == 'ignore'
+    assert reason == 'generic_robinhood_brand_derivative'
+
+
+def test_apply_tracking_judge_keeps_canonical_boost_over_llm_downgrade():
+    from rh_meme_sniper.pipeline import apply_tracking_judge
+
+    class TooConservativeJudge:
+        def judge(self, *, query, candidate, cluster):
+            return {'status': 'watch', 'reason': 'llm_too_conservative'}
+
+    candidate = CandidateToken(
+        cluster_id='cash-cat',
+        contract_address='0x020bfC650A365f8BB26819deAAbF3E21291018b4',
+        symbol='CASHCAT',
+        name='Cash Cat',
+        first_seen_ca_at='2026-07-12T08:17:17Z',
+        liquidity_usd=9000,
+        volume_24h=22000,
+        authenticity_score=95,
+        market_score=97,
+        alert_score=72,
+        verdict='watch',
+    )
+
+    status, reason = apply_tracking_judge(
+        query='cashcat robinhood',
+        candidate=candidate,
+        cluster=NarrativeCluster(cluster_id='cash-cat', canonical_name='Cash Cat'),
+        llm_judge=TooConservativeJudge(),
+    )
+
+    assert status == 'strong_candidate'
+    assert reason == 'canonical_exact_match_boost'
+
+
+def test_apply_tracking_judge_uses_llm_override_when_available():
+    from rh_meme_sniper.pipeline import apply_tracking_judge
+
+    class FakeJudge:
+        def judge(self, *, query, candidate, cluster):
+            return {'status': 'ignore', 'reason': 'llm_context_reject'}
+
+    candidate = CandidateToken(
+        cluster_id='baby-cash-cat',
+        contract_address='0x57a1AB439e8C24B90Ecc6534C05621d6E68ED35A',
+        symbol='BABYCASHCAT',
+        name='Baby Cash Cat',
+        first_seen_market_at='2026-07-12T08:17:17Z',
+        liquidity_usd=39000,
+        volume_24h=296000,
+        alert_score=70,
+        verdict='watch',
+    )
+
+    status, reason = apply_tracking_judge(
+        query='cashcat robinhood',
+        candidate=candidate,
+        cluster=NarrativeCluster(cluster_id='cash-cat', canonical_name='Cash Cat'),
+        llm_judge=FakeJudge(),
+    )
+
+    assert status == 'ignore'
+    assert reason == 'llm_context_reject'
+
+
+def test_apply_tracking_judge_falls_back_to_rule_based_on_llm_error():
+    from rh_meme_sniper.pipeline import apply_tracking_judge
+
+    class BrokenJudge:
+        def judge(self, *, query, candidate, cluster):
+            raise RuntimeError('timeout')
+
+    candidate = CandidateToken(
+        cluster_id='cash-cat',
+        contract_address='0x020bfC650A365f8BB26819deAAbF3E21291018b4',
+        symbol='CASHCAT',
+        name='Cash Cat',
+        first_seen_ca_at='2026-07-12T08:17:17Z',
+        liquidity_usd=12000,
+        volume_1h=2500,
+        volume_24h=30000,
+        buy_count_1h=30,
+        sell_count_1h=10,
+        alert_score=88,
+        verdict='alert',
+    )
+
+    status, reason = apply_tracking_judge(
+        query='cashcat robinhood',
+        candidate=candidate,
+        cluster=NarrativeCluster(cluster_id='cash-cat', canonical_name='Cash Cat'),
+        llm_judge=BrokenJudge(),
+    )
+
+    assert status == 'strong_candidate'
+    assert reason in {'high_signal_candidate', 'canonical_exact_match_boost'}

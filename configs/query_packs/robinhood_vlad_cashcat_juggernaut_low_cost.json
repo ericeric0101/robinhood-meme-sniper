@@ -1,0 +1,109 @@
+{
+  "name": "robinhood-vlad-cashcat-juggernaut-low-cost",
+  "notes": [
+    "Purpose-built first-pass pack for manual validation with TwitterAPI.io credits in mind.",
+    "Run this pack before broad discovery so you can identify earliest credible amplifiers and then promote them into the watchlist.",
+    "Account-specific probes require at least one recent tweet hit; stale tweets older than 14 days are discarded to avoid false positives from ancient replies."
+  ],
+  "pair_deny_terms": [
+    "wallet",
+    "pepe",
+    "baby",
+    "cto",
+    "wrapped"
+  ],
+  "queries": [
+    {
+      "id": "vlad-cashcat",
+      "query": "from:vladtenev cashcat",
+      "sort": "Latest",
+      "max_items": 3,
+      "goal": "Check whether Vlad explicitly mentioned CASHCAT by ticker/name.",
+      "pair_allow_terms": [
+        "cash cat",
+        "cashcat"
+      ],
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id": "vlad-juggernaut",
+      "query": "from:vladtenev juggernaut",
+      "sort": "Latest",
+      "max_items": 3,
+      "goal": "Check whether Vlad explicitly mentioned JUGGERNAUT by ticker/name.",
+      "pair_allow_terms": [
+        "juggernaut"
+      ],
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id": "vlad-cashcat-ca",
+      "query": "from:vladtenev 0x020bfC650A365f8BB26819deAAbF3E21291018b4",
+      "sort": "Latest",
+      "max_items": 2,
+      "goal": "High-precision check for Vlad referencing the official CASHCAT contract address.",
+      "pair_allow_terms": [
+        "cash cat",
+        "cashcat"
+      ],
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id": "vlad-juggernaut-ca",
+      "query": "from:vladtenev 0xd7321801caae694090694ff55a9323139f043b88",
+      "sort": "Latest",
+      "max_items": 2,
+      "goal": "High-precision check for Vlad referencing the official JUGGERNAUT contract address.",
+      "pair_allow_terms": [
+        "juggernaut"
+      ],
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id": "cashcat-official-ca",
+      "query": "\"0x020bfC650A365f8BB26819deAAbF3E21291018b4\"",
+      "sort": "Latest",
+      "max_items": 5,
+      "goal": "Find the earliest or strongest public mentions of the official CASHCAT contract address.",
+      "pair_allow_terms": [
+        "cash cat",
+        "cashcat"
+      ]
+    },
+    {
+      "id": "juggernaut-official-ca",
+      "query": "\"0xd7321801caae694090694ff55a9323139f043b88\"",
+      "sort": "Latest",
+      "max_items": 5,
+      "goal": "Find the earliest or strongest public mentions of the official JUGGERNAUT contract address.",
+      "pair_allow_terms": [
+        "juggernaut"
+      ]
+    },
+    {
+      "id": "cashcat-robinhood",
+      "query": "cashcat robinhood",
+      "sort": "Latest",
+      "max_items": 5,
+      "goal": "Measure current Robinhood-linked CASHCAT chatter after the high-precision checks.",
+      "pair_allow_terms": [
+        "cash cat",
+        "cashcat"
+      ]
+    },
+    {
+      "id": "juggernaut-robinhood",
+      "query": "juggernaut robinhood",
+      "sort": "Latest",
+      "max_items": 5,
+      "goal": "Measure current Robinhood-linked JUGGERNAUT chatter after the high-precision checks.",
+      "pair_allow_terms": [
+        "juggernaut"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "name": "robinhood-vlad-broad-discovery-low-cost",
+  "notes": [
+    "Low-cost broad discovery pack for catching new Robinhood-related meme/token narratives that are not pre-named like CASHCAT or JUGGERNAUT.",
+    "Designed to stay query-driven and cheap: short account probes, Robinhood-anchored keyword searches, and recent-window gating for account probes.",
+    "Use with --tracking-db-path so anything discovered becomes durable and can be rescanned later without re-burning deep X/Twitter history."
+  ],
+  "pair_deny_terms": [
+    "wallet",
+    "pepe",
+    "baby",
+    "cto",
+    "wrapped"
+  ],
+  "queries": [
+    {
+      "id": "vlad-robinhood-meme",
+      "query": "from:vladtenev meme robinhood",
+      "sort": "Latest",
+      "max_items": 3,
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id": "vlad-robinhood-token",
+      "query": "from:vladtenev token robinhood",
+      "sort": "Latest",
+      "max_items": 3,
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id": "vlad-robinhood-coin",
+      "query": "from:vladtenev coin robinhood",
+      "sort": "Latest",
+      "max_items": 3,
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id": "vlad-robinhood-ca",
+      "query": "from:vladtenev (\"0x\" OR ca OR contract) robinhood",
+      "sort": "Latest",
+      "max_items": 3,
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id": "robinhood-meme-broad",
+      "query": "robinhood (meme OR memecoin OR \"meme coin\")",
+      "sort": "Latest",
+      "max_items": 5
+    },
+    {
+      "id": "robinhood-token-broad",
+      "query": "robinhood (token OR coin OR contract OR ca)",
+      "sort": "Latest",
+      "max_items": 5
+    },
+    {
+      "id": "favorite-meme-context",
+      "query": "\"favorite meme\" robinhood",
+      "sort": "Top",
+      "max_items": 5
+    }
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "name": "robinhood-vlad-cashcat-juggernaut-discovery",
+  "notes": [
+    "Designed for low-cost, high-precision Robinhood meme discovery around Vlad Tenev and the current top two meme coins.",
+    "Strategy order: first inspect account mentions and official contract-address mentions, then widen to named Robinhood queries.",
+    "Account probes require at least one live tweet hit and discard stale tweets older than 14 days to avoid false positives from Dex-only matches or ancient replies."
+  ],
+  "pair_deny_terms": [
+    "wallet",
+    "pepe",
+    "baby",
+    "cto",
+    "wrapped"
+  ],
+  "account_query_templates": [
+    {
+      "id_prefix": "acct-rh",
+      "query_template": "from:{handle} robinhood",
+      "sort": "Latest",
+      "max_items": 5,
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id_prefix": "acct-cashcat",
+      "query_template": "from:{handle} cashcat",
+      "sort": "Latest",
+      "max_items": 5,
+      "pair_allow_terms": [
+        "cash cat",
+        "cashcat"
+      ],
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id_prefix": "acct-juggernaut",
+      "query_template": "from:{handle} juggernaut",
+      "sort": "Latest",
+      "max_items": 5,
+      "pair_allow_terms": [
+        "juggernaut"
+      ],
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id_prefix": "acct-cashcat-ca",
+      "query_template": "from:{handle} 0x020bfC650A365f8BB26819deAAbF3E21291018b4",
+      "sort": "Latest",
+      "max_items": 3,
+      "pair_allow_terms": [
+        "cash cat",
+        "cashcat"
+      ],
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id_prefix": "acct-juggernaut-ca",
+      "query_template": "from:{handle} 0xd7321801caae694090694ff55a9323139f043b88",
+      "sort": "Latest",
+      "max_items": 3,
+      "pair_allow_terms": [
+        "juggernaut"
+      ],
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    }
+  ],
+  "keyword_queries": [
+    {
+      "id": "cashcat-official-ca",
+      "query": "\"0x020bfC650A365f8BB26819deAAbF3E21291018b4\"",
+      "sort": "Latest",
+      "max_items": 5,
+      "pair_allow_terms": [
+        "cash cat",
+        "cashcat"
+      ]
+    },
+    {
+      "id": "juggernaut-official-ca",
+      "query": "\"0xd7321801caae694090694ff55a9323139f043b88\"",
+      "sort": "Latest",
+      "max_items": 5,
+      "pair_allow_terms": [
+        "juggernaut"
+      ]
+    },
+    {
+      "id": "cashcat-robinhood",
+      "query": "cashcat robinhood",
+      "sort": "Latest",
+      "max_items": 5,
+      "pair_allow_terms": [
+        "cash cat",
+        "cashcat"
+      ]
+    },
+    {
+      "id": "juggernaut-robinhood",
+      "query": "juggernaut robinhood",
+      "sort": "Latest",
+      "max_items": 5,
+      "pair_allow_terms": [
+        "juggernaut"
+      ]
+    },
+    {
+      "id": "cashcat-or-juggernaut-robinhood",
+      "query": "(cashcat OR juggernaut) robinhood",
+      "sort": "Top",
+      "max_items": 5,
+      "pair_allow_terms": [
+        "cash cat",
+        "cashcat",
+        "juggernaut"
+      ]
+    }
+  ]
+}

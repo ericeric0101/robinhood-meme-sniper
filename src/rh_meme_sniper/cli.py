@@ -7,7 +7,9 @@ from typing_extensions import Annotated
 
 import typer
 
-from rh_meme_sniper.pipeline import run_alert_loop_from_payload, run_live_alert_loop, run_query_pack, run_discovery
+from rh_meme_sniper.pipeline import run_alert_loop_from_payload, run_live_alert_loop, run_query_pack, run_discovery, rescan_tracked_tokens
+from rh_meme_sniper.state import TrackingState
+from rh_meme_sniper.config import settings
 from rh_meme_sniper.sources.apify_client import ApifyAccessError
 from rh_meme_sniper.sources.x_source import TwitterAPIIOAccessError
 
@@ -128,6 +130,7 @@ def run_query_pack_command(
     send_telegram: Annotated[bool, typer.Option("--send-telegram/--no-send-telegram")] = False,
     state_db_path: Annotated[Path | None, typer.Option("--state-db-path")] = None,
     alert_cooldown_seconds: Annotated[int, typer.Option("--alert-cooldown-seconds", min=0)] = 3600,
+    tracking_db_path: Annotated[Path | None, typer.Option("--tracking-db-path")] = settings.tracking_db_path,
 ) -> None:
     try:
         results = run_query_pack(
@@ -135,6 +138,7 @@ def run_query_pack_command(
             send_telegram=send_telegram,
             state_db_path=state_db_path,
             alert_cooldown_seconds=alert_cooldown_seconds,
+            tracking_db_path=tracking_db_path,
         )
     except (ApifyAccessError, TwitterAPIIOAccessError) as exc:
         typer.echo(str(exc))
@@ -155,6 +159,7 @@ def run_discovery_command(
     actor_id: Annotated[str | None, typer.Option("--actor-id")] = None,
     state_db_path: Annotated[Path | None, typer.Option("--state-db-path")] = None,
     alert_cooldown_seconds: Annotated[int, typer.Option("--alert-cooldown-seconds", min=0)] = 3600,
+    tracking_db_path: Annotated[Path | None, typer.Option("--tracking-db-path")] = settings.tracking_db_path,
 ) -> None:
     try:
         results = run_discovery(
@@ -164,6 +169,7 @@ def run_discovery_command(
             actor_id=actor_id,
             state_db_path=state_db_path,
             alert_cooldown_seconds=alert_cooldown_seconds,
+            tracking_db_path=tracking_db_path,
         )
     except (ApifyAccessError, TwitterAPIIOAccessError) as exc:
         typer.echo(str(exc))
@@ -173,6 +179,27 @@ def run_discovery_command(
         "run_count": len(results.runs),
         "runs": results.runs,
     }, ensure_ascii=False, indent=2))
+
+
+@app.command("prune-tracking-db")
+def prune_tracking_db_command(
+    tracking_db_path: Annotated[Path, typer.Argument()],
+    retention_days: Annotated[int, typer.Option("--retention-days", min=1)] = settings.tracking_retention_days,
+    drop_stale_tracked_tokens_days: Annotated[int | None, typer.Option("--drop-stale-tracked-tokens-days", min=1)] = settings.tracking_drop_stale_tokens_days,
+) -> None:
+    summary = TrackingState(tracking_db_path).prune(
+        retention_days=retention_days,
+        drop_stale_tracked_tokens_days=drop_stale_tracked_tokens_days,
+    )
+    typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
+@app.command("rescan-tracked-tokens")
+def rescan_tracked_tokens_command(
+    tracking_db_path: Annotated[Path, typer.Argument()],
+) -> None:
+    results = rescan_tracked_tokens(tracking_db_path=tracking_db_path)
+    typer.echo(json.dumps(results, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

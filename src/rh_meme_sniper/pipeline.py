@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -11,13 +12,14 @@ from rh_meme_sniper.cluster.narrative_cluster import cluster_events
 from rh_meme_sniper.config import settings
 from rh_meme_sniper.models import CandidateToken, NarrativeCluster
 from rh_meme_sniper.score.authenticity import score_clusters
-from rh_meme_sniper.state import SeenState
+from rh_meme_sniper.state import SeenState, TrackingState
 from rh_meme_sniper.sources.apify_client import ApifyAccessError
 from rh_meme_sniper.sources.apify_x import is_no_results_item, normalize_tweet_item, tweet_record
 from rh_meme_sniper.sources.dex_client import DexScreenerClient
 from rh_meme_sniper.sources.x_source import get_x_provider
 from rh_meme_sniper.sources.dexscreener import normalize_pair_item
 from rh_meme_sniper.storage.json_store import JsonStore
+from rh_meme_sniper.tracking_judge import get_tracking_judge_from_settings
 
 
 @dataclass(slots=True)
@@ -123,6 +125,115 @@ def _fetch_pairs(query_terms: list[str], chain_id: str | None = None, limit_per_
     return list(deduped.values())
 
 
+def _candidate_from_pair_item(item: dict[str, Any], *, fallback_query: str = '') -> CandidateToken:
+    base = item.get('baseToken') or {}
+    txns_1h = ((item.get('txns') or {}).get('h1') or {})
+    pair_created_at = _parse_iso8601(str(normalize_pair_item(item).metrics.get('pair_created_at') or ''))
+    return CandidateToken(
+        cluster_id=fallback_query or str(base.get('symbol') or base.get('name') or base.get('address') or 'tracked'),
+        contract_address=str(base.get('address') or ''),
+        symbol=str(base.get('symbol') or '') or None,
+        name=str(base.get('name') or '') or None,
+        pair_address=str(item.get('pairAddress') or '') or None,
+        pair_created_at=pair_created_at.isoformat().replace('+00:00', 'Z') if pair_created_at else None,
+        first_seen_market_at=pair_created_at.isoformat().replace('+00:00', 'Z') if pair_created_at else None,
+        liquidity_usd=float(((item.get('liquidity') or {}).get('usd') or 0.0)),
+        volume_1h=float(((item.get('volume') or {}).get('h1') or 0.0)),
+        volume_24h=float(((item.get('volume') or {}).get('h24') or 0.0)),
+        buy_count_1h=int(txns_1h.get('buys') or 0),
+        sell_count_1h=int(txns_1h.get('sells') or 0),
+    )
+
+
+def judge_candidate_tracking_status(
+    *,
+    query: str,
+    candidate: CandidateToken,
+    cluster: NarrativeCluster,
+) -> tuple[str, str]:
+    generic_terms = {
+        'robinhood', 'vlad', 'bitstamp', 'token', 'coin', 'meme', 'memecoin',
+    }
+    name = (candidate.name or cluster.canonical_name or '').strip()
+    name_lower = name.lower()
+    symbol = (candidate.symbol or '').strip().lower()
+    query_lower = query.lower()
+
+    if name_lower in generic_terms or symbol in generic_terms:
+        return 'ignore', 'generic_or_brand_term'
+
+    brand_derivative_suffixes = {
+        'wallet', 'payments', 'payment', 'protocol', 'summer', 'bull', 'ai',
+    }
+    if name_lower.startswith('robinhood '):
+        tail_words = [part for part in name_lower.split()[1:] if part]
+        if tail_words and any(word in brand_derivative_suffixes for word in tail_words):
+            return 'ignore', 'generic_robinhood_brand_derivative'
+
+    blob_markers = (' ca ', ' https://', ' http://', ' delivered ', ' return ', ' next.', '\n')
+    if len(name) >= 80 and any(marker in name_lower for marker in blob_markers):
+        return 'ignore', 'garbage_extracted_name'
+
+    if 'favorite meme' in query_lower and name_lower in {'robinhood', 'vlad'}:
+        return 'ignore', 'generic_or_brand_term'
+
+    query_terms = {part for part in ''.join(ch if ch.isalnum() else ' ' for ch in query_lower).split() if part}
+    candidate_name_norm = ' '.join(part for part in ''.join(ch if ch.isalnum() else ' ' for ch in name_lower).split() if part)
+    candidate_symbol_norm = symbol.replace('$', '')
+    exact_symbol_match = bool(candidate_symbol_norm) and candidate_symbol_norm in query_terms
+    exact_name_match = bool(candidate_name_norm) and candidate_name_norm in query_lower
+    exact_cluster_match = bool(cluster.canonical_name) and cluster.canonical_name.strip().lower() == name_lower
+    if (
+        candidate.contract_address
+        and (candidate.first_seen_ca_at or candidate.first_seen_market_at)
+        and (exact_symbol_match or exact_name_match or exact_cluster_match)
+        and candidate.liquidity_usd >= 5000
+        and (candidate.volume_24h >= 10000 or candidate.market_score >= 85 or candidate.authenticity_score >= 85)
+    ):
+        return 'strong_candidate', 'canonical_exact_match_boost'
+
+    if candidate.verdict == 'alert' and candidate.alert_score >= 80 and candidate.liquidity_usd >= 5000:
+        return 'strong_candidate', 'high_signal_candidate'
+    if candidate.contract_address and (candidate.first_seen_ca_at or candidate.first_seen_market_at):
+        return 'watch', 'has_contract_signal'
+    return 'ignore', 'low_signal_candidate'
+
+
+def apply_tracking_judge(
+    *,
+    query: str,
+    candidate: CandidateToken,
+    cluster: NarrativeCluster,
+    llm_judge: Any | None = None,
+) -> tuple[str, str]:
+    baseline_status, baseline_reason = judge_candidate_tracking_status(query=query, candidate=candidate, cluster=cluster)
+    hard_ignore_reasons = {
+        'generic_or_brand_term',
+        'generic_robinhood_brand_derivative',
+        'garbage_extracted_name',
+    }
+    hard_strong_reasons = {
+        'canonical_exact_match_boost',
+    }
+    if baseline_status == 'ignore' and baseline_reason in hard_ignore_reasons:
+        return baseline_status, baseline_reason
+    if baseline_status == 'strong_candidate' and baseline_reason in hard_strong_reasons:
+        return baseline_status, baseline_reason
+
+    judge = llm_judge or get_tracking_judge_from_settings()
+    if judge is not None:
+        try:
+            decision = judge.judge(query=query, candidate=candidate, cluster=cluster)
+            if isinstance(decision, dict):
+                status = str(decision.get('status') or '').strip()
+                reason = str(decision.get('reason') or '').strip() or 'llm_judge'
+                if status in {'ignore', 'watch', 'strong_candidate'}:
+                    return status, reason
+        except Exception:
+            pass
+    return baseline_status, baseline_reason
+
+
 def _timeline_records(clusters: list[NarrativeCluster]) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for cluster in clusters:
@@ -164,6 +275,38 @@ def _cap_items(items: list[dict[str, Any]], max_items: int) -> list[dict[str, An
     if max_items <= 0:
         return items
     return items[:max_items]
+
+
+def _parse_iso8601(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _filter_recent_tweets(
+    raw_tweets: list[dict[str, Any]],
+    *,
+    max_tweet_age_days: int | None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    if max_tweet_age_days is None:
+        return raw_tweets
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=max_tweet_age_days)
+    filtered: list[dict[str, Any]] = []
+    for item in raw_tweets:
+        observed_at = _parse_iso8601(str(item.get('createdAt') or item.get('created_at') or ''))
+        if observed_at and observed_at >= cutoff:
+            filtered.append(item)
+    return filtered
 
 
 def _load_json_config(path: Path) -> dict[str, Any]:
@@ -208,7 +351,10 @@ def _safe_get_account_balance(provider: Any) -> dict[str, Any] | None:
     getter = getattr(provider, 'get_account_balance', None)
     if not callable(getter):
         return None
-    return getter()
+    try:
+        return getter()
+    except Exception:
+        return None
 
 
 def _build_discovery_queries(
@@ -247,6 +393,8 @@ def _build_discovery_queries(
                         'max_items': max_items,
                         'pair_allow_terms': list(template.get('pair_allow_terms') or default_allow_terms),
                         'pair_deny_terms': list(template.get('pair_deny_terms') or default_deny_terms),
+                        'require_tweet_match_for_alerts': bool(template.get('require_tweet_match_for_alerts', False)),
+                        'max_tweet_age_days': int(template['max_tweet_age_days']) if template.get('max_tweet_age_days') is not None else None,
                     }
                 )
 
@@ -268,6 +416,8 @@ def _build_discovery_queries(
                 'max_items': max_items,
                 'pair_allow_terms': list(item.get('pair_allow_terms') or default_allow_terms),
                 'pair_deny_terms': list(item.get('pair_deny_terms') or default_deny_terms),
+                'require_tweet_match_for_alerts': bool(item.get('require_tweet_match_for_alerts', False)),
+                'max_tweet_age_days': int(item['max_tweet_age_days']) if item.get('max_tweet_age_days') is not None else None,
             }
         )
 
@@ -298,6 +448,28 @@ def _apply_seen_state(
         seen_state.record_emit(candidate, cluster, key=decision.key)
         filtered_alerts.append(alert_text)
     return filtered_alerts
+
+
+def _record_tracking_state(*, tracking_db_path: Path | None, query: str, clusters: list[NarrativeCluster]) -> None:
+    if not tracking_db_path:
+        return
+    tracking_state = TrackingState(tracking_db_path)
+    for cluster in clusters:
+        candidate = cluster.canonical_candidate
+        if not candidate or not candidate.contract_address:
+            continue
+        status, reason = apply_tracking_judge(query=query, candidate=candidate, cluster=cluster)
+        candidate.tracking_status = status
+        candidate.tracking_reason = reason
+        if status == 'ignore':
+            continue
+        tracking_state.record_candidate(query=query, candidate=candidate, cluster=cluster)
+        for event in cluster.events:
+            tracking_state.record_mention(query=query, contract_address=candidate.contract_address, event=event)
+    tracking_state.prune(
+        retention_days=settings.tracking_retention_days,
+        drop_stale_tracked_tokens_days=settings.tracking_drop_stale_tokens_days,
+    )
 
 
 def run_alert_loop_from_payload(
@@ -369,6 +541,8 @@ def run_live_alert_loop(
     pair_deny_terms: list[str] | None = None,
     state_db_path: Path | None = None,
     alert_cooldown_seconds: int = 3600,
+    require_tweet_match_for_alerts: bool = False,
+    max_tweet_age_days: int | None = None,
 ) -> AlertLoopArtifacts:
     output_dir = output_dir or settings.output_dir
     provider = get_x_provider(actor_id=actor_id)
@@ -386,11 +560,12 @@ def run_live_alert_loop(
         ],
         max_items,
     )
+    raw_tweets = _filter_recent_tweets(raw_tweets, max_tweet_age_days=max_tweet_age_days)
     balance_after = _safe_get_account_balance(provider)
     tweet_events = [normalize_tweet_item(item) for item in raw_tweets]
 
     dex_queries = _build_dex_queries(query, tweet_events)
-    raw_pairs = _fetch_pairs(dex_queries, chain_id=settings.chain_id)
+    raw_pairs = [] if require_tweet_match_for_alerts and not raw_tweets else _fetch_pairs(dex_queries, chain_id=settings.chain_id)
     raw_pairs = filter_pair_items(raw_pairs, allow_terms=pair_allow_terms, deny_terms=pair_deny_terms)
 
     payload = {"tweets": raw_tweets, "pairs": raw_pairs}
@@ -416,6 +591,7 @@ def run_query_pack(
     output_dir: Path | None = None,
     state_db_path: Path | None = None,
     alert_cooldown_seconds: int = 3600,
+    tracking_db_path: Path | None = None,
 ) -> QueryPackRunArtifacts:
     config = json.loads(query_pack_path.read_text())
     actor_id = config.get("actor_id")
@@ -441,7 +617,10 @@ def run_query_pack(
             pair_deny_terms=list(item.get("pair_deny_terms") or default_deny_terms),
             state_db_path=state_db_path,
             alert_cooldown_seconds=alert_cooldown_seconds,
+            require_tweet_match_for_alerts=bool(item.get('require_tweet_match_for_alerts', False)),
+            max_tweet_age_days=int(item['max_tweet_age_days']) if item.get('max_tweet_age_days') is not None else None,
         )
+        _record_tracking_state(tracking_db_path=tracking_db_path, query=query, clusters=getattr(artifacts, 'clusters', []))
         runs.append(
             {
                 "id": item.get("id") or _slugify(query),
@@ -468,6 +647,7 @@ def run_discovery(
     actor_id: str | None = None,
     state_db_path: Path | None = None,
     alert_cooldown_seconds: int = 3600,
+    tracking_db_path: Path | None = None,
 ) -> DiscoveryRunArtifacts:
     watchlist = _load_json_config(watchlist_path)
     query_buckets = _load_json_config(query_buckets_path)
@@ -487,7 +667,10 @@ def run_discovery(
             pair_deny_terms=list(item.get('pair_deny_terms') or []),
             state_db_path=state_db_path,
             alert_cooldown_seconds=alert_cooldown_seconds,
+            require_tweet_match_for_alerts=bool(item.get('require_tweet_match_for_alerts', False)),
+            max_tweet_age_days=int(item['max_tweet_age_days']) if item.get('max_tweet_age_days') is not None else None,
         )
+        _record_tracking_state(tracking_db_path=tracking_db_path, query=str(item['query']), clusters=getattr(artifacts, 'clusters', []))
         runs.append(
             {
                 'id': _coerce_query_id(str(item.get('id') or ''), str(item['query'])),
@@ -503,3 +686,46 @@ def run_discovery(
         )
 
     return DiscoveryRunArtifacts(runs=runs)
+
+
+def rescan_tracked_tokens(*, tracking_db_path: Path, chain_id: str | None = None) -> dict[str, Any]:
+    tracking_state = TrackingState(tracking_db_path)
+    tracked_tokens = tracking_state.list_tracked_tokens()
+    runs: list[dict[str, Any]] = []
+    for item in tracked_tokens:
+        query_terms = [value for value in [item.get('contract_address'), item.get('symbol'), item.get('name')] if value]
+        pair_items = _fetch_pairs(query_terms, chain_id=chain_id or settings.chain_id, limit_per_query=5)
+        matching = None
+        target_contract = str(item.get('contract_address') or '').lower()
+        for pair in pair_items:
+            base = pair.get('baseToken') or {}
+            if str(base.get('address') or '').lower() == target_contract:
+                matching = pair
+                break
+        if matching is None and pair_items:
+            matching = pair_items[0]
+        if matching is None:
+            runs.append({'contract_address': item.get('contract_address'), 'status': 'no_pair_found'})
+            continue
+        candidate = _candidate_from_pair_item(matching, fallback_query=str(item.get('query') or 'tracked-token'))
+        tracking_state.record_market_snapshot(query=str(item.get('query') or item.get('symbol') or item.get('name') or item.get('contract_address') or ''), candidate=candidate)
+        runs.append(
+            {
+                'contract_address': candidate.contract_address,
+                'symbol': candidate.symbol,
+                'name': candidate.name,
+                'pair_address': candidate.pair_address,
+                'liquidity_usd': candidate.liquidity_usd,
+                'volume_1h': candidate.volume_1h,
+                'volume_24h': candidate.volume_24h,
+            }
+        )
+    tracking_state.prune(
+        retention_days=settings.tracking_retention_days,
+        drop_stale_tracked_tokens_days=settings.tracking_drop_stale_tokens_days,
+    )
+    return {
+        'tracked_token_count': len(tracked_tokens),
+        'rescanned_count': len(runs),
+        'runs': runs,
+    }

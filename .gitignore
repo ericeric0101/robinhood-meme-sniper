@@ -6,8 +6,7 @@ __pycache__/
 .mypy_cache/
 ruff_cache/
 outputs/
-data/raw/
-data/cache/
+data/
 logs/
 build/
 dist/

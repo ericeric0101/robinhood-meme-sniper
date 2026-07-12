@@ -1,0 +1,69 @@
+{
+  "name": "robinhood-vlad-broad-discovery",
+  "notes": [
+    "Broad but low-cost Robinhood meme discovery around Vlad and adjacent KOLs.",
+    "Use this when you want to find new meme/token names or contract addresses not already hard-coded into the focused CASHCAT/JUGGERNAUT pack.",
+    "Account probes keep replies enabled, but require live tweet/reply hits and only inspect the most recent 14 days."
+  ],
+  "pair_deny_terms": [
+    "wallet",
+    "pepe",
+    "baby",
+    "cto",
+    "wrapped"
+  ],
+  "account_query_templates": [
+    {
+      "id_prefix": "acct-rh",
+      "query_template": "from:{handle} robinhood",
+      "sort": "Latest",
+      "max_items": 4,
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id_prefix": "acct-meme",
+      "query_template": "from:{handle} meme",
+      "sort": "Latest",
+      "max_items": 4,
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id_prefix": "acct-token",
+      "query_template": "from:{handle} token",
+      "sort": "Latest",
+      "max_items": 4,
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    },
+    {
+      "id_prefix": "acct-contract",
+      "query_template": "from:{handle} (\"0x\" OR contract OR ca)",
+      "sort": "Latest",
+      "max_items": 3,
+      "require_tweet_match_for_alerts": true,
+      "max_tweet_age_days": 14
+    }
+  ],
+  "keyword_queries": [
+    {
+      "id": "rh-meme-broad",
+      "query": "robinhood (meme OR memecoin OR \"meme coin\")",
+      "sort": "Latest",
+      "max_items": 5
+    },
+    {
+      "id": "rh-token-broad",
+      "query": "robinhood (token OR coin OR contract OR ca)",
+      "sort": "Latest",
+      "max_items": 5
+    },
+    {
+      "id": "favorite-meme-context",
+      "query": "\"favorite meme\" robinhood",
+      "sort": "Top",
+      "max_items": 5
+    }
+  ]
+}

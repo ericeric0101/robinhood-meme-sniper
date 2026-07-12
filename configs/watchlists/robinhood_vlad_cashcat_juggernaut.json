@@ -1,0 +1,19 @@
+{
+  "name": "robinhood-vlad-cashcat-juggernaut",
+  "notes": [
+    "Low-cost watchlist for Robinhood narrative discovery around Vlad Tenev, CASHCAT, and JUGGERNAUT.",
+    "Primary account remains Vlad Tenev; secondary accounts are Phase 1 candidates surfaced from official contract-address exact searches.",
+    "Secondary accounts are provisional discovery seeds, not yet fully validated canonical KOLs."
+  ],
+  "primary_accounts": [
+    "vladtenev"
+  ],
+  "secondary_accounts": [
+    "sol_jingou",
+    "WhalesChina",
+    "robinhooddailys",
+    "feibo03",
+    "morkolips",
+    "SapariyaNipun"
+  ]
+}

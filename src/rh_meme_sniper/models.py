@@ -42,6 +42,8 @@ class CandidateToken(BaseModel):
     hype_score: float = 0.0
     alert_score: float = 0.0
     verdict: str = "watch"
+    tracking_status: str = "watch"
+    tracking_reason: str | None = None
 
 
 class NarrativeCluster(BaseModel):
