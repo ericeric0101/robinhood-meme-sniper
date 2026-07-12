@@ -7,7 +7,9 @@ Python-first prototype for discovering likely-canonical Robinhood-chain meme coi
 This repo is currently a **Phase 1 + Phase 2 prototype**, not a production auto-buy sniper.
 
 ### What works today
-- X/Twitter ingestion via **Apify** actor `xtdata~twitter-x-scraper`
+- X/Twitter ingestion via pluggable provider abstraction
+  - **Apify** actor `xtdata~twitter-x-scraper` (current default)
+  - **TwitterAPI.io** provider support for advanced tweet search
 - Tweet normalization: text / author / URL / engagement / contract extraction
 - DexScreener enrichment for pair / liquidity / volume / txn stats
 - Narrative clustering across tweets + market records
@@ -71,8 +73,23 @@ No secrets required.
 
 ### Minimum env for live Apify runs
 ```env
+X_PROVIDER=apify
 APIFY_API_TOKEN=...
 ```
+
+### Minimum env for live TwitterAPI.io runs
+```env
+X_PROVIDER=twitterapiio
+TWITTERAPIIO_API_KEY=...
+# or the official-skill alias:
+TWITTERAPI_IO_KEY=...
+```
+
+Notes:
+- TwitterAPI.io currently uses `GET /twitter/tweet/advanced_search`
+- `Top` and `Latest` are supported directly
+- `Latest + Top` currently degrades to `Latest` for this provider
+- `run-alert-loop` now reports `provider` and `usage_summary` (balance before/after + estimated credits used when available)
 
 ### Additional env for Telegram delivery
 ```env
@@ -135,6 +152,27 @@ Expected outputs go to:
 ```bash
 cd ~/robinhood-meme-sniper
 uv run --python 3.11 python -m rh_meme_sniper.cli run-alert-loop 'cashcat robinhood' --max-items 5 --sort Latest --actor-id xtdata~twitter-x-scraper
+```
+
+### Same run with TwitterAPI.io provider
+```bash
+cd ~/robinhood-meme-sniper
+X_PROVIDER=twitterapiio \
+TWITTERAPIIO_API_KEY=... \
+uv run --python 3.11 python -m rh_meme_sniper.cli run-alert-loop 'cashcat robinhood' --max-items 5 --sort Latest
+```
+
+Typical summary output now includes:
+
+```json
+{
+  "provider": "twitterapiio",
+  "usage_summary": {
+    "balance_before": {"recharge_credits": 1000000, "total_bonus_credits": 20000},
+    "balance_after": {"recharge_credits": 999700, "total_bonus_credits": 20000},
+    "credits_used_estimate": 300
+  }
+}
 ```
 
 ### Same run, but inspect only counts + artifact paths
@@ -364,6 +402,7 @@ For now, the safest pattern is:
 ## Notes
 
 - The current default X prototype ingestion uses **Apify** actor `xtdata~twitter-x-scraper`.
+- TwitterAPI.io is now wired as an alternate provider through `X_PROVIDER=twitterapiio`.
 - `xtdata` is best treated as a **low-frequency prototype / historical source**, not a production high-frequency poller.
 - Safe to push to GitHub **only if secrets stay out of the repo**.
 - Commit `.env.example`; never commit real `.env`.

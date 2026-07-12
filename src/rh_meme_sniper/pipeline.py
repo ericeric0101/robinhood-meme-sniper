@@ -12,9 +12,10 @@ from rh_meme_sniper.config import settings
 from rh_meme_sniper.models import CandidateToken, NarrativeCluster
 from rh_meme_sniper.score.authenticity import score_clusters
 from rh_meme_sniper.state import SeenState
-from rh_meme_sniper.sources.apify_client import ApifyAccessError, ApifyClient
-from rh_meme_sniper.sources.apify_x import build_search_input, is_no_results_item, normalize_tweet_item, tweet_record
+from rh_meme_sniper.sources.apify_client import ApifyAccessError
+from rh_meme_sniper.sources.apify_x import is_no_results_item, normalize_tweet_item, tweet_record
 from rh_meme_sniper.sources.dex_client import DexScreenerClient
+from rh_meme_sniper.sources.x_source import get_x_provider
 from rh_meme_sniper.sources.dexscreener import normalize_pair_item
 from rh_meme_sniper.storage.json_store import JsonStore
 
@@ -28,6 +29,8 @@ class AlertLoopArtifacts:
     output_paths: dict[str, str]
     alerts: list[str]
     clusters: list[NarrativeCluster]
+    provider_name: str | None = None
+    usage_summary: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -171,6 +174,41 @@ def _load_json_config(path: Path) -> dict[str, Any]:
 def _coerce_query_id(raw_id: str | None, query: str) -> str:
     normalized = (raw_id or '').strip()
     return normalized or _slugify(query)
+
+
+def _total_available_credits(balance: dict[str, Any] | None) -> int | None:
+    if not isinstance(balance, dict):
+        return None
+    recharge = int(balance.get('recharge_credits') or 0)
+    bonus = int(balance.get('total_bonus_credits') or 0)
+    return recharge + bonus
+
+
+def _build_usage_summary(
+    provider_name: str | None,
+    balance_before: dict[str, Any] | None,
+    balance_after: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not balance_before and not balance_after:
+        return None
+    total_before = _total_available_credits(balance_before)
+    total_after = _total_available_credits(balance_after)
+    credits_used_estimate = None
+    if total_before is not None and total_after is not None:
+        credits_used_estimate = max(0, total_before - total_after)
+    return {
+        'provider': provider_name,
+        'balance_before': balance_before,
+        'balance_after': balance_after,
+        'credits_used_estimate': credits_used_estimate,
+    }
+
+
+def _safe_get_account_balance(provider: Any) -> dict[str, Any] | None:
+    getter = getattr(provider, 'get_account_balance', None)
+    if not callable(getter):
+        return None
+    return getter()
 
 
 def _build_discovery_queries(
@@ -332,24 +370,23 @@ def run_live_alert_loop(
     state_db_path: Path | None = None,
     alert_cooldown_seconds: int = 3600,
 ) -> AlertLoopArtifacts:
-    if not settings.apify_api_token:
-        raise RuntimeError("APIFY_API_TOKEN is missing in .env")
-
     output_dir = output_dir or settings.output_dir
-    selected_actor_id = actor_id or settings.apify_x_actor_id
-    apify = ApifyClient(settings.apify_api_token, selected_actor_id)
-    actor_input = build_search_input(
-        query,
-        max_items=max_items,
-        sort=sort,
-        tweet_language=tweet_language,
-        actor_id=selected_actor_id,
-    )
-    run = apify.run_actor(actor_input)
+    provider = get_x_provider(actor_id=actor_id)
+    balance_before = _safe_get_account_balance(provider)
     raw_tweets = _cap_items(
-        [item for item in run.items if isinstance(item, dict) and not is_no_results_item(item)],
+        [
+            item
+            for item in provider.search_tweets(
+                query=query,
+                max_items=max_items,
+                sort=sort,
+                tweet_language=tweet_language,
+            )
+            if isinstance(item, dict) and not is_no_results_item(item)
+        ],
         max_items,
     )
+    balance_after = _safe_get_account_balance(provider)
     tweet_events = [normalize_tweet_item(item) for item in raw_tweets]
 
     dex_queries = _build_dex_queries(query, tweet_events)
@@ -357,7 +394,7 @@ def run_live_alert_loop(
     raw_pairs = filter_pair_items(raw_pairs, allow_terms=pair_allow_terms, deny_terms=pair_deny_terms)
 
     payload = {"tweets": raw_tweets, "pairs": raw_pairs}
-    return run_alert_loop_from_payload(
+    artifacts = run_alert_loop_from_payload(
         query=query,
         payload=payload,
         output_dir=output_dir,
@@ -367,6 +404,9 @@ def run_live_alert_loop(
         state_db_path=state_db_path,
         alert_cooldown_seconds=alert_cooldown_seconds,
     )
+    artifacts.provider_name = getattr(provider, 'provider_name', None)
+    artifacts.usage_summary = _build_usage_summary(artifacts.provider_name, balance_before, balance_after)
+    return artifacts
 
 
 def run_query_pack(

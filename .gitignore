@@ -12,4 +12,7 @@ logs/
 build/
 dist/
 *.egg-info/
+.agents/
+.hermes/
+skills-lock.json
 .DS_Store

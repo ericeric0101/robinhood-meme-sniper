@@ -9,6 +9,7 @@ import typer
 
 from rh_meme_sniper.pipeline import run_alert_loop_from_payload, run_live_alert_loop, run_query_pack, run_discovery
 from rh_meme_sniper.sources.apify_client import ApifyAccessError
+from rh_meme_sniper.sources.x_source import TwitterAPIIOAccessError
 
 app = typer.Typer(add_completion=False)
 
@@ -50,7 +51,7 @@ def apify_search(
             pair_allow_terms=pair_allow_terms,
             pair_deny_terms=pair_deny_terms,
         )
-    except ApifyAccessError as exc:
+    except (ApifyAccessError, TwitterAPIIOAccessError) as exc:
         typer.echo(str(exc))
         raise typer.Exit(2) from exc
 
@@ -59,6 +60,8 @@ def apify_search(
         "pair_count": artifacts.pair_count,
         "cluster_count": artifacts.cluster_count,
         "alert_count": artifacts.alert_count,
+        "provider": artifacts.provider_name,
+        "usage_summary": artifacts.usage_summary,
         "output_paths": artifacts.output_paths,
     }, ensure_ascii=False, indent=2))
 
@@ -100,7 +103,7 @@ def run_alert_loop(
                 state_db_path=state_db_path,
                 alert_cooldown_seconds=alert_cooldown_seconds,
             )
-        except ApifyAccessError as exc:
+        except (ApifyAccessError, TwitterAPIIOAccessError) as exc:
             typer.echo(str(exc))
             raise typer.Exit(2) from exc
 
@@ -109,6 +112,8 @@ def run_alert_loop(
         "pair_count": artifacts.pair_count,
         "cluster_count": artifacts.cluster_count,
         "alert_count": artifacts.alert_count,
+        "provider": artifacts.provider_name,
+        "usage_summary": artifacts.usage_summary,
         "output_paths": artifacts.output_paths,
     }, ensure_ascii=False, indent=2))
 
@@ -131,7 +136,7 @@ def run_query_pack_command(
             state_db_path=state_db_path,
             alert_cooldown_seconds=alert_cooldown_seconds,
         )
-    except ApifyAccessError as exc:
+    except (ApifyAccessError, TwitterAPIIOAccessError) as exc:
         typer.echo(str(exc))
         raise typer.Exit(2) from exc
 
@@ -160,7 +165,7 @@ def run_discovery_command(
             state_db_path=state_db_path,
             alert_cooldown_seconds=alert_cooldown_seconds,
         )
-    except ApifyAccessError as exc:
+    except (ApifyAccessError, TwitterAPIIOAccessError) as exc:
         typer.echo(str(exc))
         raise typer.Exit(2) from exc
 

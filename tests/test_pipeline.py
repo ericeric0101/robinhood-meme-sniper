@@ -10,6 +10,7 @@ from rh_meme_sniper.alerts.telegram import render_candidate_alert
 from rh_meme_sniper.cli import app
 from rh_meme_sniper.pipeline import filter_pair_items, run_alert_loop_from_payload
 from rh_meme_sniper.sources.apify_client import ApifyRunResult, ApifyClient
+from rh_meme_sniper.sources.x_source import get_x_provider, TwitterAPIIOProvider
 
 from typer.testing import CliRunner
 
@@ -297,6 +298,210 @@ def test_apify_no_results_without_paid_plan_message_is_not_treated_as_access_blo
     assert ApifyClient._is_free_plan_api_block(result) is False
 
 
+def test_get_x_provider_defaults_to_apify(monkeypatch):
+    monkeypatch.setenv('X_PROVIDER', 'apify')
+
+    provider = get_x_provider()
+
+    assert provider.provider_name == 'apify'
+
+
+def test_get_x_provider_selects_twitterapiio(monkeypatch):
+    monkeypatch.setenv('X_PROVIDER', 'twitterapiio')
+
+    provider = get_x_provider()
+
+    assert provider.provider_name == 'twitterapiio'
+
+
+def test_get_x_provider_rejects_unknown_provider(monkeypatch):
+    monkeypatch.setenv('X_PROVIDER', 'unknown-provider')
+
+    with __import__('pytest').raises(ValueError, match='Unsupported X provider'):
+        get_x_provider()
+
+
+def test_run_live_alert_loop_uses_selected_provider(monkeypatch, tmp_path):
+    from rh_meme_sniper.pipeline import run_live_alert_loop
+
+    real_ca = '0x1111111111111111111111111111111111111111'
+    provider_calls = []
+
+    class FakeProvider:
+        provider_name = 'twitterapiio'
+
+        def search_tweets(self, *, query, max_items, sort, tweet_language):
+            provider_calls.append({
+                'query': query,
+                'max_items': max_items,
+                'sort': sort,
+                'tweet_language': tweet_language,
+            })
+            return [
+                {
+                    'id': 'tweet-1',
+                    'text': f'Robinhood Office Cat CA {real_ca}',
+                    'createdAt': '2026-07-09T01:18:00Z',
+                    'author': {'userName': 'kol_alpha'},
+                    'url': 'https://x.com/a/status/1',
+                    'likeCount': 200,
+                    'retweetCount': 25,
+                }
+            ]
+
+    monkeypatch.setattr('rh_meme_sniper.pipeline.get_x_provider', lambda provider_name=None, actor_id=None: FakeProvider())
+    monkeypatch.setattr('rh_meme_sniper.pipeline._fetch_pairs', lambda query_terms, chain_id=None, limit_per_query=5: [
+        {
+            'pairAddress': 'pair-real',
+            'chainId': 'robinhood',
+            'baseToken': {'address': real_ca, 'name': 'Robinhood Office Cat', 'symbol': 'ROC'},
+            'url': 'https://dexscreener.com/robinhood/pair-real',
+            'pairCreatedAt': 1783560000000,
+            'liquidity': {'usd': 25000},
+            'volume': {'h24': 200000, 'h1': 25000},
+            'txns': {'h1': {'buys': 200, 'sells': 160}},
+        }
+    ])
+
+    artifacts = run_live_alert_loop(
+        query='robinhood office cat',
+        max_items=5,
+        sort='Latest',
+        output_dir=tmp_path,
+        send_telegram=False,
+    )
+
+    assert provider_calls == [{
+        'query': 'robinhood office cat',
+        'max_items': 5,
+        'sort': 'Latest',
+        'tweet_language': 'en',
+    }]
+    assert artifacts.tweet_count == 1
+    assert artifacts.alert_count == 1
+
+
+def test_twitterapiio_provider_uses_advanced_search_and_paginates(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    payloads = [
+        {
+            'tweets': [
+                {'id': '1', 'text': 'one', 'author': {'userName': 'a'}, 'createdAt': 'Tue Dec 10 07:00:30 +0000 2024', 'url': 'https://x.com/a/status/1'},
+                {'id': '2', 'text': 'two', 'author': {'userName': 'b'}, 'createdAt': 'Tue Dec 10 07:00:31 +0000 2024', 'url': 'https://x.com/b/status/2'},
+            ],
+            'has_next_page': True,
+            'next_cursor': 'cursor-2',
+        },
+        {
+            'tweets': [
+                {'id': '3', 'text': 'three', 'author': {'userName': 'c'}, 'createdAt': 'Tue Dec 10 07:00:32 +0000 2024', 'url': 'https://x.com/c/status/3'},
+                {'id': '4', 'text': 'four', 'author': {'userName': 'd'}, 'createdAt': 'Tue Dec 10 07:00:33 +0000 2024', 'url': 'https://x.com/d/status/4'},
+            ],
+            'has_next_page': False,
+            'next_cursor': '',
+        },
+    ]
+
+    def fake_get(url, *, params=None, headers=None, timeout=None):
+        calls.append({'url': url, 'params': params, 'headers': headers, 'timeout': timeout})
+        return FakeResponse(payloads[len(calls) - 1])
+
+    monkeypatch.setattr('rh_meme_sniper.sources.x_source.httpx.get', fake_get)
+    provider = TwitterAPIIOProvider(api_key='test-key')
+
+    tweets = provider.search_tweets(query='cashcat robinhood', max_items=3, sort='Top', tweet_language='en')
+
+    assert len(tweets) == 3
+    assert [tweet['id'] for tweet in tweets] == ['1', '2', '3']
+    assert calls[0]['url'] == 'https://api.twitterapi.io/twitter/tweet/advanced_search'
+    assert calls[0]['params'] == {'query': 'cashcat robinhood', 'queryType': 'Top'}
+    assert calls[0]['headers']['X-API-Key'] == 'test-key'
+    assert calls[1]['params'] == {'query': 'cashcat robinhood', 'queryType': 'Top', 'cursor': 'cursor-2'}
+
+
+def test_twitterapiio_provider_maps_latest_plus_top_to_latest(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {'tweets': [], 'has_next_page': False, 'next_cursor': ''}
+
+    captured = {}
+
+    def fake_get(url, *, params=None, headers=None, timeout=None):
+        captured['params'] = params
+        return FakeResponse()
+
+    monkeypatch.setattr('rh_meme_sniper.sources.x_source.httpx.get', fake_get)
+    provider = TwitterAPIIOProvider(api_key='test-key')
+
+    provider.search_tweets(query='office cat', max_items=5, sort='Latest + Top', tweet_language='en')
+
+    assert captured['params']['queryType'] == 'Latest'
+
+
+def test_twitterapiio_provider_surfaces_credit_error_message(monkeypatch):
+    import httpx
+
+    class FakeResponse:
+        status_code = 402
+        text = '{"error":"Unauthorized","message":"Credits is not enough.Please recharge"}'
+
+        def raise_for_status(self):
+            request = httpx.Request('GET', 'https://api.twitterapi.io/twitter/tweet/advanced_search')
+            response = httpx.Response(402, request=request, text=self.text)
+            raise httpx.HTTPStatusError('402 Payment Required', request=request, response=response)
+
+        def json(self):
+            return {'error': 'Unauthorized', 'message': 'Credits is not enough.Please recharge'}
+
+    def fake_get(url, *, params=None, headers=None, timeout=None):
+        return FakeResponse()
+
+    monkeypatch.setattr('rh_meme_sniper.sources.x_source.httpx.get', fake_get)
+    provider = TwitterAPIIOProvider(api_key='test-key')
+
+    with __import__('pytest').raises(RuntimeError, match='Credits is not enough'):
+        provider.search_tweets(query='cashcat robinhood', max_items=2, sort='Latest', tweet_language='en')
+
+
+def test_twitterapiio_provider_reads_account_balance(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {'recharge_credits': 12345, 'total_bonus_credits': 67}
+
+    captured = {}
+
+    def fake_get(url, *, params=None, headers=None, timeout=None):
+        captured['url'] = url
+        captured['headers'] = headers
+        return FakeResponse()
+
+    monkeypatch.setattr('rh_meme_sniper.sources.x_source.httpx.get', fake_get)
+    provider = TwitterAPIIOProvider(api_key='test-key')
+
+    balance = provider.get_account_balance()
+
+    assert captured['url'] == 'https://api.twitterapi.io/oapi/my/info'
+    assert captured['headers']['x-api-key'] == 'test-key'
+    assert balance == {'recharge_credits': 12345, 'total_bonus_credits': 67}
+
+
 def test_filter_pair_items_respects_allowlist_and_denylist():
     pair_items = [
         {
@@ -403,6 +608,8 @@ def test_cli_run_query_pack_executes_each_query(monkeypatch, tmp_path):
             alert_count = 0
             output_paths = {'alerts': f"outputs/{kwargs['query'].replace(' ', '-')}.log"}
             alerts = []
+            provider_name = 'apify'
+            usage_summary = None
 
         return Artifacts()
 
@@ -416,6 +623,34 @@ def test_cli_run_query_pack_executes_each_query(monkeypatch, tmp_path):
     assert calls[1]['query'] == 'office cat robinhood'
     assert 'cashcat robinhood' in result.stdout
     assert 'office cat robinhood' in result.stdout
+
+
+def test_cli_run_alert_loop_includes_provider_usage_summary(monkeypatch):
+    def fake_run_live_alert_loop(**kwargs):
+        class Artifacts:
+            tweet_count = 2
+            pair_count = 3
+            cluster_count = 2
+            alert_count = 1
+            output_paths = {'alerts': 'outputs/cashcat.log'}
+            alerts = ['alert text']
+            provider_name = 'twitterapiio'
+            usage_summary = {
+                'balance_before': {'recharge_credits': 1000, 'total_bonus_credits': 20},
+                'balance_after': {'recharge_credits': 700, 'total_bonus_credits': 20},
+                'credits_used_estimate': 300,
+            }
+
+        return Artifacts()
+
+    monkeypatch.setattr('rh_meme_sniper.cli.run_live_alert_loop', fake_run_live_alert_loop)
+
+    result = runner.invoke(app, ['run-alert-loop', 'cashcat robinhood', '--max-items', '2', '--sort', 'Latest'])
+
+    assert result.exit_code == 0
+    assert '"provider": "twitterapiio"' in result.stdout
+    assert '"credits_used_estimate": 300' in result.stdout
+    assert '"recharge_credits": 700' in result.stdout
 
 
 def test_run_alert_loop_from_payload_suppresses_duplicate_alerts_with_seen_state(tmp_path):
