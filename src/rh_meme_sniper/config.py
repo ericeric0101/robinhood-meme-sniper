@@ -21,6 +21,11 @@ class Settings(BaseModel):
     tracking_judge_api_key: str | None = os.getenv('TRACKING_JUDGE_API_KEY')
     tracking_judge_model: str | None = os.getenv('TRACKING_JUDGE_MODEL')
     tracking_judge_timeout_seconds: int = int(os.getenv('TRACKING_JUDGE_TIMEOUT_SECONDS', '30'))
+    event_judge_enabled: bool = os.getenv('EVENT_JUDGE_ENABLED', 'false').lower() in {'1', 'true', 'yes', 'on'}
+    event_judge_endpoint: str | None = os.getenv('EVENT_JUDGE_ENDPOINT')
+    event_judge_api_key: str | None = os.getenv('EVENT_JUDGE_API_KEY')
+    event_judge_model: str | None = os.getenv('EVENT_JUDGE_MODEL')
+    event_judge_timeout_seconds: int = int(os.getenv('EVENT_JUDGE_TIMEOUT_SECONDS', os.getenv('TRACKING_JUDGE_TIMEOUT_SECONDS', '30')))
     poll_interval_seconds: int = int(os.getenv('POLL_INTERVAL_SECONDS', '180'))
     x_provider: str = os.getenv('X_PROVIDER', 'apify')
     apify_api_token: str | None = os.getenv('APIFY_API_TOKEN')

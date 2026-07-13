@@ -11,6 +11,7 @@ from typing import Any
 from rh_meme_sniper.alerts.telegram import TelegramAlerter, render_candidate_alert
 from rh_meme_sniper.cluster.narrative_cluster import cluster_events
 from rh_meme_sniper.config import settings
+from rh_meme_sniper.event_judge import get_event_judge_from_settings, normalize_event_judge_decision
 from rh_meme_sniper.models import CandidateToken, NarrativeCluster
 from rh_meme_sniper.score.authenticity import score_clusters
 from rh_meme_sniper.state import SeenState, TrackingState
@@ -85,6 +86,8 @@ EVENT_RULES: list[tuple[str, tuple[str, ...]]] = [
         ('vibe check', 'soon', 'cooking', 'watch this', 'something coming', '👀'),
     ),
 ]
+HARD_EVENT_TYPES = {'exit_risk', 'denial', 'contract'}
+LLM_GRAY_EVENT_TYPES = {'mention', 'link', 'cashtag'}
 
 
 def _slugify(value: str) -> str:
@@ -134,6 +137,38 @@ def _classify_entity_event(text: str | None, *, symbols: list[str], contracts: l
     if urls:
         return 'link'
     return 'mention'
+
+
+def _judge_entity_event(
+    text: str | None,
+    *,
+    symbols: list[str],
+    contracts: list[str],
+    urls: list[str],
+    author_handle: str | None,
+    event_judge: Any | None,
+) -> str:
+    deterministic = _classify_entity_event(text, symbols=symbols, contracts=contracts, urls=urls)
+    if deterministic in HARD_EVENT_TYPES or deterministic not in LLM_GRAY_EVENT_TYPES or event_judge is None:
+        return deterministic
+    try:
+        decision = normalize_event_judge_decision(
+            event_judge.judge(
+                text=text or '',
+                symbols=symbols,
+                contracts=contracts,
+                urls=urls,
+                author_handle=author_handle,
+            )
+        )
+    except Exception:
+        return deterministic
+    if decision is None:
+        return deterministic
+    if decision.event_type in HARD_EVENT_TYPES and deterministic not in HARD_EVENT_TYPES:
+        # Hard risk/denial/contract classes require deterministic evidence.
+        return deterministic
+    return decision.event_type
 
 
 def _normalize_terms(values: list[str] | None) -> list[str]:
@@ -786,6 +821,7 @@ def run_kol_scan(
     watchlist = _load_json_config(watchlist_path)
     handles = _watchlist_handles(watchlist)
     provider = get_x_provider(actor_id=actor_id)
+    event_judge = get_event_judge_from_settings()
     tracking_state = TrackingState(tracking_db_path)
     runs: list[dict[str, Any]] = []
 
@@ -817,7 +853,14 @@ def run_kol_scan(
             contracts = _dedupe_preserve([*event.contract_addresses, *_extract_pumpfun_contracts(text)])
             urls = _dedupe_preserve(event.urls)
             entities = _extract_handles(text)
-            event_type = _classify_entity_event(text, symbols=symbols, contracts=contracts, urls=urls)
+            event_type = _judge_entity_event(
+                text,
+                symbols=symbols,
+                contracts=contracts,
+                urls=urls,
+                author_handle=event.author_handle,
+                event_judge=event_judge,
+            )
             tracking_state.record_entity_event(
                 entity_key=entity_key,
                 query=query,

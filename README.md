@@ -104,6 +104,13 @@ TRACKING_JUDGE_ENDPOINT=https://api.openai.com/v1/chat/completions
 TRACKING_JUDGE_API_KEY=...
 TRACKING_JUDGE_MODEL=gpt-4.1-mini
 TRACKING_JUDGE_TIMEOUT_SECONDS=30
+
+# optional D-2.5 KOL lifecycle event judge; falls back to tracking judge endpoint/model if blank
+EVENT_JUDGE_ENABLED=false
+EVENT_JUDGE_ENDPOINT=
+EVENT_JUDGE_API_KEY=
+EVENT_JUDGE_MODEL=
+EVENT_JUDGE_TIMEOUT_SECONDS=30
 ```
 
 Notes:
@@ -340,6 +347,12 @@ Current D-2 event judging is deterministic and intentionally conservative. It cl
 | `contract` / `cashtag` / `link` / `mention` | fallback classes when lifecycle rules do not match |
 
 The JSON summary includes `event_type_counts` per handle, which is the quick view for whether a watchlist run found denial, catalyst, exit-risk, or only generic mentions.
+
+D-2.5 adds an optional OpenAI-compatible event judge for semantic gray areas only. It is intentionally bounded:
+- It is called only when deterministic rules fall back to `mention`, `link`, or `cashtag`.
+- It must return JSON keys: `event_type`, `confidence`, `reason`, `risk_flags`.
+- Deterministic hard classes such as `exit_risk`, `denial`, and explicit `contract` are not LLM-overridable.
+- If the LLM fails, returns invalid JSON, or returns an unsupported event type, the deterministic classification is kept.
 
 This command does **not** auto-buy. It is the first layer for KOL/entity-first narrative memory; query packs remain useful for follow-up probes, backfill, and canonical CA verification.
 

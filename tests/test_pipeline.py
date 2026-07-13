@@ -1048,6 +1048,124 @@ def test_classify_entity_event_detects_phase_d_lifecycle_events():
         assert _classify_entity_event(text, symbols=[], contracts=[], urls=[]) == expected
 
 
+def test_openai_compatible_event_judge_parses_json_response(monkeypatch):
+    from rh_meme_sniper.event_judge import OpenAICompatibleEventJudge
+
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                'choices': [
+                    {
+                        'message': {
+                            'content': json.dumps({
+                                'event_type': 'creator_engaged',
+                                'confidence': 0.87,
+                                'reason': 'KOL appears to participate in the token narrative.',
+                                'risk_flags': ['ambiguous_endorsement'],
+                            })
+                        }
+                    }
+                ]
+            }
+
+    def fake_post(url, *, headers, json, timeout):
+        captured['url'] = url
+        captured['headers'] = headers
+        captured['json'] = json
+        captured['timeout'] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr('rh_meme_sniper.event_judge.httpx.post', fake_post)
+
+    judge = OpenAICompatibleEventJudge(
+        endpoint='https://llm.example/v1/chat/completions',
+        api_key='test-key',
+        model='test-model',
+        timeout=12,
+    )
+    decision = judge.judge(
+        text='the creator joined the space and blessed the ticker',
+        symbols=['ANSEM'],
+        contracts=[],
+        urls=[],
+        author_handle='graykol',
+    )
+
+    assert decision.event_type == 'creator_engaged'
+    assert decision.confidence == 0.87
+    assert decision.reason == 'KOL appears to participate in the token narrative.'
+    assert decision.risk_flags == ['ambiguous_endorsement']
+    assert captured['url'] == 'https://llm.example/v1/chat/completions'
+    assert captured['headers']['Authorization'] == 'Bearer test-key'
+    assert captured['json']['model'] == 'test-model'
+    assert captured['json']['response_format'] == {'type': 'json_object'}
+
+
+def test_llm_event_judge_only_overrides_gray_area_events(tmp_path, monkeypatch):
+    from rh_meme_sniper.pipeline import run_kol_scan
+
+    watchlist_path = tmp_path / 'watchlist.json'
+    watchlist_path.write_text(json.dumps({'primary_accounts': ['graykol']}))
+    tracking_db_path = tmp_path / 'tracking.db'
+
+    class FakeProvider:
+        provider_name = 'fake-x'
+
+        def get_user_tweets(self, *, user_name, max_items):
+            return [
+                {
+                    'id': 'tweet-gray',
+                    'text': 'this account is starting to become the face of the movement',
+                    'url': 'https://x.com/graykol/status/1',
+                    'createdAt': '2026-07-13T01:00:00Z',
+                    'author': {'userName': 'graykol'},
+                },
+                {
+                    'id': 'tweet-denial',
+                    'text': 'not me, not my coin, I did not launch this',
+                    'url': 'https://x.com/graykol/status/2',
+                    'createdAt': '2026-07-13T01:01:00Z',
+                    'author': {'userName': 'graykol'},
+                },
+            ]
+
+    class FakeEventJudge:
+        def __init__(self):
+            self.calls = []
+
+        def judge(self, *, text, symbols, contracts, urls, author_handle):
+            self.calls.append(text)
+            return {
+                'event_type': 'identity_linked',
+                'confidence': 0.91,
+                'reason': 'Text says the account is becoming the face of the movement.',
+                'risk_flags': [],
+            }
+
+    fake_judge = FakeEventJudge()
+    monkeypatch.setattr('rh_meme_sniper.pipeline.get_x_provider', lambda actor_id=None: FakeProvider())
+    monkeypatch.setattr('rh_meme_sniper.pipeline.get_event_judge_from_settings', lambda: fake_judge)
+
+    results = run_kol_scan(
+        watchlist_path=watchlist_path,
+        tracking_db_path=tracking_db_path,
+        max_items=5,
+        max_tweet_age_days=14,
+    )
+
+    assert fake_judge.calls == ['this account is starting to become the face of the movement']
+    assert results.runs[0]['event_type_counts'] == {'identity_linked': 1, 'denial': 1}
+    with sqlite3.connect(tracking_db_path) as conn:
+        rows = conn.execute('SELECT source_id, event_type FROM entity_events ORDER BY source_id').fetchall()
+
+    assert rows == [('tweet-denial', 'denial'), ('tweet-gray', 'identity_linked')]
+
+
 def test_run_kol_scan_records_entity_events_from_watchlist_activity(tmp_path, monkeypatch):
     from rh_meme_sniper.pipeline import run_kol_scan
 
