@@ -183,6 +183,96 @@ class TrackingState:
                 )
                 '''
             )
+            conn.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS tracked_entities (
+                    entity_key TEXT PRIMARY KEY,
+                    entity_type TEXT NOT NULL,
+                    display_name TEXT,
+                    source TEXT,
+                    metadata_json TEXT,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL
+                )
+                '''
+            )
+            conn.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS entity_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entity_key TEXT NOT NULL,
+                    source TEXT,
+                    source_id TEXT,
+                    observed_at TEXT,
+                    author_handle TEXT,
+                    query TEXT,
+                    event_type TEXT NOT NULL,
+                    symbols_json TEXT NOT NULL DEFAULT '[]',
+                    contracts_json TEXT NOT NULL DEFAULT '[]',
+                    urls_json TEXT NOT NULL DEFAULT '[]',
+                    entities_json TEXT NOT NULL DEFAULT '[]',
+                    text TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(entity_key, source_id, event_type)
+                )
+                '''
+            )
+
+    def record_entity(self, *, entity_key: str, entity_type: str, display_name: str, source: str = 'x', metadata_json: str = '{}') -> None:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                '''
+                INSERT INTO tracked_entities (
+                    entity_key, entity_type, display_name, source, metadata_json, first_seen_at, last_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(entity_key) DO UPDATE SET
+                    entity_type=excluded.entity_type,
+                    display_name=excluded.display_name,
+                    source=excluded.source,
+                    metadata_json=excluded.metadata_json,
+                    last_seen_at=excluded.last_seen_at
+                ''',
+                (entity_key, entity_type, display_name, source, metadata_json, now, now),
+            )
+
+    def record_entity_event(
+        self,
+        *,
+        entity_key: str,
+        query: str,
+        event: RawEvent,
+        event_type: str,
+        symbols_json: str,
+        contracts_json: str,
+        urls_json: str,
+        entities_json: str,
+    ) -> None:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                '''
+                INSERT OR IGNORE INTO entity_events (
+                    entity_key, source, source_id, observed_at, author_handle, query,
+                    event_type, symbols_json, contracts_json, urls_json, entities_json, text, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''',
+                (
+                    entity_key,
+                    event.source,
+                    event.source_id,
+                    event.observed_at,
+                    event.author_handle,
+                    query,
+                    event_type,
+                    symbols_json,
+                    contracts_json,
+                    urls_json,
+                    entities_json,
+                    event.text,
+                    now,
+                ),
+            )
 
     def record_candidate(self, *, query: str, candidate: CandidateToken, cluster: NarrativeCluster) -> None:
         now = _utc_now_iso()

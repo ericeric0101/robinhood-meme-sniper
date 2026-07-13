@@ -25,6 +25,7 @@ This repo is currently a **Phase 1 + Phase 2 prototype**, not a production auto-
 - Batch execution of a JSON **query pack**
 - Query-level Dex pair **allowlist / denylist** filtering to reduce market pollution
 - Seed-account + keyword-bucket **discovery runner**
+- Phase D **KOL-first scanner** for ANSEM-style narrative discovery: scan watchlist handles first, extract cashtags / CAs / Pump.fun-style contracts / creator-signal phrases, and persist entity events to tracking DB
 - SQLite-backed **seen-state / alert cooldown dedupe**
 
 ### What does **not** exist yet
@@ -134,6 +135,9 @@ Current commands:
 - `run-alert-loop`
 - `run-query-pack`
 - `run-discovery`
+- `run-kol-scan`
+- `prune-tracking-db`
+- `rescan-tracked-tokens`
 
 ---
 
@@ -299,7 +303,41 @@ What it does:
 
 ---
 
-## 6) Stateful dedupe / cooldown
+## 6) Phase D KOL-first scanner
+
+`run-kol-scan` is the first ANSEM-style scanner path. Instead of requiring you to know every future token name, it scans watchlist handles first and records entity activity signals into `tracking.db`.
+
+Included starter config:
+- `configs/watchlists/phase_d_kol_seed.json`
+
+Example low-cost manual run:
+
+```bash
+cd ~/robinhood-meme-sniper
+X_PROVIDER=twitterapiio \
+uv run --python 3.11 python -m rh_meme_sniper.cli run-kol-scan \
+  configs/watchlists/phase_d_kol_seed.json \
+  --tracking-db-path ./data/tracking.db \
+  --max-items 3 \
+  --max-tweet-age-days 14
+```
+
+What it records:
+- `tracked_entities`: durable handle/entity rows such as `x:blknoiz06`
+- `entity_events`: per-post signals including event type, cashtags, Pump.fun-style contracts, URLs, mentioned handles, raw text, and query
+
+Current D-1 extraction is intentionally conservative and alert-only:
+- `$SYMBOL` cashtags
+- EVM CAs from the existing parser
+- Pump.fun-style contracts ending in `pump`
+- mentioned handles
+- creator/narrative signal phrases such as `vibe check`, `stimmy`, `airdrop`, `creator fee`, `not me`, `community`, and `trench`
+
+This command does **not** auto-buy. It is the first layer for KOL/entity-first narrative memory; query packs remain useful for follow-up probes, backfill, and canonical CA verification.
+
+---
+
+## 7) Stateful dedupe / cooldown
 
 `run-alert-loop`, `run-query-pack`, and `run-discovery` all support:
 

@@ -14,6 +14,7 @@ from rh_meme_sniper.pipeline import filter_pair_items, run_alert_loop_from_paylo
 from rh_meme_sniper.sources.apify_client import ApifyRunResult, ApifyClient
 from rh_meme_sniper.sources.x_source import get_x_provider, TwitterAPIIOProvider
 from rh_meme_sniper.models import CandidateToken, NarrativeCluster, RawEvent
+from rh_meme_sniper.alerts.telegram import render_candidate_alert
 
 from typer.testing import CliRunner
 
@@ -423,6 +424,21 @@ def test_run_live_alert_loop_requires_tweet_match_for_account_probe(monkeypatch,
     assert artifacts.alert_count == 0
 
 
+def test_filter_recent_tweets_accepts_twitterapiio_timeline_datetime():
+    from rh_meme_sniper.pipeline import _filter_recent_tweets
+
+    tweets = [
+        {
+            'id': 'tweet-new',
+            'createdAt': 'Mon Jul 13 13:52:39 +0000 2026',
+            'text': 'Robinhood Chain update',
+        }
+    ]
+    now = datetime(2026, 7, 13, 14, 0, tzinfo=timezone.utc)
+
+    assert _filter_recent_tweets(tweets, max_tweet_age_days=14, now=now) == tweets
+
+
 def test_run_live_alert_loop_filters_stale_tweets_for_account_probe(monkeypatch, tmp_path):
     from rh_meme_sniper.pipeline import run_live_alert_loop
 
@@ -520,6 +536,38 @@ def test_twitterapiio_provider_uses_advanced_search_and_paginates(monkeypatch):
     assert calls[0]['params'] == {'query': 'cashcat robinhood', 'queryType': 'Top'}
     assert calls[0]['headers']['X-API-Key'] == 'test-key'
     assert calls[1]['params'] == {'query': 'cashcat robinhood', 'queryType': 'Top', 'cursor': 'cursor-2'}
+
+
+def test_twitterapiio_provider_fetches_user_last_tweets(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                'data': {
+                    'tweets': [
+                        {'id': 'tweet-1', 'text': 'vibe check $ANSEM'},
+                    ],
+                    'has_next_page': False,
+                }
+            }
+
+    def fake_get(url, *, params=None, headers=None, timeout=None):
+        calls.append({'url': url, 'params': params, 'headers': headers, 'timeout': timeout})
+        return FakeResponse()
+
+    monkeypatch.setattr('rh_meme_sniper.sources.x_source.httpx.get', fake_get)
+    provider = TwitterAPIIOProvider(api_key='test-key')
+
+    tweets = provider.get_user_tweets(user_name='blknoiz06', max_items=5)
+
+    assert tweets == [{'id': 'tweet-1', 'text': 'vibe check $ANSEM'}]
+    assert calls[0]['url'] == 'https://api.twitterapi.io/twitter/user/last_tweets'
+    assert calls[0]['params']['userName'] == 'blknoiz06'
+    assert calls[0]['headers']['X-API-Key'] == 'test-key'
 
 
 def test_twitterapiio_provider_maps_latest_plus_top_to_latest(monkeypatch):
@@ -983,6 +1031,66 @@ def test_run_query_pack_records_tracking_state(monkeypatch, tmp_path):
     assert snapshots == [('0x020bfC650A365f8BB26819deAAbF3E21291018b4', 1000.0, 200.0)]
 
 
+def test_run_kol_scan_records_entity_events_from_watchlist_activity(tmp_path, monkeypatch):
+    from rh_meme_sniper.pipeline import run_kol_scan
+
+    watchlist_path = tmp_path / 'watchlist.json'
+    watchlist_path.write_text(json.dumps({
+        'primary_accounts': ['blknoiz06'],
+    }))
+    tracking_db_path = tmp_path / 'tracking.db'
+
+    class FakeProvider:
+        provider_name = 'fake-x'
+
+        def get_account_balance(self):
+            return None
+
+        def get_user_tweets(self, *, user_name, max_items):
+            assert user_name == 'blknoiz06'
+            assert max_items == 3
+            return [
+                {
+                    'id': 'tweet-ansem-1',
+                    'text': 'vibe check $ANSEM stimmy for the trenches 9cRCn9rGT8V2imeM2BaKs13yhMEais3ruM3rPvTGpump',
+                    'url': 'https://x.com/blknoiz06/status/1',
+                    'createdAt': '2026-07-13T01:00:00Z',
+                    'author': {'userName': 'blknoiz06'},
+                }
+            ]
+
+    monkeypatch.setattr('rh_meme_sniper.pipeline.get_x_provider', lambda actor_id=None: FakeProvider())
+
+    results = run_kol_scan(
+        watchlist_path=watchlist_path,
+        tracking_db_path=tracking_db_path,
+        max_items=3,
+        max_tweet_age_days=14,
+    )
+
+    assert results.runs == [
+        {
+            'handle': 'blknoiz06',
+            'query': 'from:blknoiz06',
+            'tweet_count': 1,
+            'event_count': 1,
+        }
+    ]
+    with sqlite3.connect(tracking_db_path) as conn:
+        entity = conn.execute('SELECT entity_key, entity_type, display_name FROM tracked_entities').fetchone()
+        event = conn.execute(
+            'SELECT entity_key, source_id, event_type, symbols_json, contracts_json, text FROM entity_events'
+        ).fetchone()
+
+    assert entity == ('x:blknoiz06', 'x_handle', 'blknoiz06')
+    assert event[0] == 'x:blknoiz06'
+    assert event[1] == 'tweet-ansem-1'
+    assert event[2] == 'creator_signal'
+    assert json.loads(event[3]) == ['ANSEM']
+    assert json.loads(event[4]) == ['9cRCn9rGT8V2imeM2BaKs13yhMEais3ruM3rPvTGpump']
+    assert 'vibe check' in event[5]
+
+
 def test_rescan_tracked_tokens_reads_tracking_db_and_refreshes_snapshots(tmp_path, monkeypatch):
     from rh_meme_sniper.pipeline import rescan_tracked_tokens
     from rh_meme_sniper.state import TrackingState
@@ -1088,6 +1196,29 @@ def test_tracking_state_prune_removes_old_mentions_and_snapshots_but_keeps_track
         assert conn.execute('SELECT COUNT(*) FROM market_snapshots').fetchone()[0] == 0
 
 
+def test_cli_run_kol_scan_outputs_summary(tmp_path, monkeypatch):
+    watchlist_path = tmp_path / 'watchlist.json'
+    watchlist_path.write_text(json.dumps({'primary_accounts': ['blknoiz06']}))
+    tracking_db_path = tmp_path / 'tracking.db'
+
+    class Results:
+        runs = [{'handle': 'blknoiz06', 'query': 'from:blknoiz06', 'tweet_count': 1, 'event_count': 1}]
+
+    def fake_run_kol_scan(**kwargs):
+        assert kwargs['watchlist_path'] == watchlist_path
+        assert kwargs['tracking_db_path'] == tracking_db_path
+        assert kwargs['max_items'] == 3
+        return Results()
+
+    monkeypatch.setattr('rh_meme_sniper.cli.run_kol_scan', fake_run_kol_scan)
+
+    result = runner.invoke(app, ['run-kol-scan', str(watchlist_path), '--tracking-db-path', str(tracking_db_path), '--max-items', '3'])
+
+    assert result.exit_code == 0
+    assert '"run_count": 1' in result.stdout
+    assert 'from:blknoiz06' in result.stdout
+
+
 def test_cli_prune_tracking_db_outputs_summary(tmp_path):
     from rh_meme_sniper.state import TrackingState
 
@@ -1117,6 +1248,26 @@ def test_cli_prune_tracking_db_outputs_summary(tmp_path):
 
     assert result.exit_code == 0
     assert '"deleted_market_snapshots": 1' in result.stdout
+
+
+def test_render_candidate_alert_includes_dexscreener_link_and_copyable_ca():
+    candidate = CandidateToken(
+        cluster_id='cash-cat',
+        contract_address='0x020bfC650A365f8BB26819deAAbF3E21291018b4',
+        symbol='CASHCAT',
+        name='Cash Cat',
+        authenticity_score=95.0,
+        market_score=100.0,
+        alert_score=89.5,
+        liquidity_usd=11070968.34,
+        volume_1h=1911362.85,
+        verdict='alert',
+    )
+
+    text = render_candidate_alert(candidate)
+
+    assert '<a href="https://dexscreener.com/robinhood/0x020bfC650A365f8BB26819deAAbF3E21291018b4">DexScreener</a>' in text
+    assert 'CA: <code>0x020bfC650A365f8BB26819deAAbF3E21291018b4</code>' in text
 
 
 def test_rule_judge_marks_generic_broad_candidate_as_ignore():

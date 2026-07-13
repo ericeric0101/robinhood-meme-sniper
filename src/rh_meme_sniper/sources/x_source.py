@@ -27,6 +27,8 @@ class XSearchProvider(Protocol):
         tweet_language: str | None,
     ) -> list[dict]: ...
 
+    def get_user_tweets(self, *, user_name: str, max_items: int) -> list[dict]: ...
+
     def get_account_balance(self) -> dict[str, int] | None: ...
 
 
@@ -38,6 +40,9 @@ class ApifyXProvider:
 
     def get_account_balance(self) -> dict[str, int] | None:
         return None
+
+    def get_user_tweets(self, *, user_name: str, max_items: int) -> list[dict]:
+        return self.search_tweets(query=f'from:{user_name}', max_items=max_items, sort='Latest', tweet_language=None)
 
     def search_tweets(
         self,
@@ -99,6 +104,40 @@ class TwitterAPIIOProvider:
     @staticmethod
     def _augment_query(query: str, tweet_language: str | None) -> str:
         return query.strip()
+
+    @staticmethod
+    def _extract_tweets_from_payload(payload: dict) -> list[dict]:
+        data = payload.get('data') if isinstance(payload.get('data'), dict) else {}
+        tweets = payload.get('tweets') or data.get('tweets') or []
+        return [item for item in tweets if isinstance(item, dict)]
+
+    def get_user_tweets(self, *, user_name: str, max_items: int) -> list[dict]:
+        if not self.api_key:
+            raise RuntimeError('TWITTERAPIIO_API_KEY is missing in .env')
+
+        endpoint = f'{self.base_url.rstrip("/")}/twitter/user/last_tweets'
+        headers = {'X-API-Key': self.api_key}
+        tweets: list[dict] = []
+        cursor: str | None = None
+        while len(tweets) < max_items:
+            params = {'userName': user_name}
+            if cursor:
+                params['cursor'] = cursor
+            response = httpx.get(endpoint, params=params, headers=headers, timeout=30)
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                message = response.text.strip() or str(exc)
+                raise TwitterAPIIOAccessError(f'TwitterAPI.io user timeline request failed: {message}') from exc
+            payload = response.json()
+            page_tweets = self._extract_tweets_from_payload(payload)
+            tweets.extend(page_tweets)
+            data = payload.get('data') if isinstance(payload.get('data'), dict) else {}
+            has_next_page = bool(payload.get('has_next_page') or data.get('has_next_page'))
+            cursor = str(payload.get('next_cursor') or data.get('next_cursor') or '').strip() or None
+            if not has_next_page or not cursor or not page_tweets:
+                break
+        return tweets[:max_items]
 
     def search_tweets(
         self,

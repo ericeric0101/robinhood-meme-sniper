@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,20 @@ class DiscoveryRunArtifacts:
     runs: list[dict[str, Any]]
 
 
+@dataclass(slots=True)
+class KolScanRunArtifacts:
+    runs: list[dict[str, Any]]
+
+
+SYMBOL_RE = re.compile(r'(?<![A-Za-z0-9_])\$([A-Za-z][A-Za-z0-9_]{1,15})')
+PUMPFUN_ADDRESS_RE = re.compile(r'\b[1-9A-HJ-NP-Za-km-z]{32,44}pump\b')
+HANDLE_RE = re.compile(r'(?<![A-Za-z0-9_])@([A-Za-z0-9_]{2,20})')
+CREATOR_SIGNAL_TERMS = {
+    'vibe check', 'stimmy', 'airdrop', 'creator fee', 'linked', 'not me',
+    'not my coin', 'community', 'trench', 'trenches', 'pump.fun', 'pumpfun',
+}
+
+
 def _slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug or "query"
@@ -61,6 +76,37 @@ def _dedupe_preserve(values: list[str]) -> list[str]:
         seen.add(normalized)
         result.append(normalized)
     return result
+
+
+def _extract_cashtags(text: str | None) -> list[str]:
+    if not text:
+        return []
+    return _dedupe_preserve([match.upper() for match in SYMBOL_RE.findall(text)])
+
+
+def _extract_pumpfun_contracts(text: str | None) -> list[str]:
+    if not text:
+        return []
+    return _dedupe_preserve(PUMPFUN_ADDRESS_RE.findall(text))
+
+
+def _extract_handles(text: str | None) -> list[str]:
+    if not text:
+        return []
+    return _dedupe_preserve([match for match in HANDLE_RE.findall(text)])
+
+
+def _classify_entity_event(text: str | None, *, symbols: list[str], contracts: list[str], urls: list[str]) -> str:
+    lowered = (text or '').lower()
+    if any(term in lowered for term in CREATOR_SIGNAL_TERMS):
+        return 'creator_signal'
+    if contracts:
+        return 'contract'
+    if symbols:
+        return 'cashtag'
+    if urls:
+        return 'link'
+    return 'mention'
 
 
 def _normalize_terms(values: list[str] | None) -> list[str]:
@@ -286,7 +332,10 @@ def _parse_iso8601(value: str | None) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(raw.replace('Z', '+00:00'))
     except ValueError:
-        return None
+        try:
+            parsed = parsedate_to_datetime(raw)
+        except (TypeError, ValueError):
+            return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
@@ -686,6 +735,75 @@ def run_discovery(
         )
 
     return DiscoveryRunArtifacts(runs=runs)
+
+
+def _watchlist_handles(watchlist: dict[str, Any]) -> list[str]:
+    handles: list[str] = []
+    for key in ('primary_accounts', 'secondary_accounts', 'accounts', 'handles'):
+        for value in watchlist.get(key) or []:
+            handle = str(value).strip().lstrip('@')
+            if handle:
+                handles.append(handle)
+    return _dedupe_preserve(handles)
+
+
+def run_kol_scan(
+    *,
+    watchlist_path: Path,
+    tracking_db_path: Path,
+    max_items: int = 5,
+    sort: str = 'Latest',
+    max_tweet_age_days: int | None = 14,
+    actor_id: str | None = None,
+) -> KolScanRunArtifacts:
+    watchlist = _load_json_config(watchlist_path)
+    handles = _watchlist_handles(watchlist)
+    provider = get_x_provider(actor_id=actor_id)
+    tracking_state = TrackingState(tracking_db_path)
+    runs: list[dict[str, Any]] = []
+
+    for handle in handles:
+        query = f'from:{handle}'
+        raw_tweets = [
+            item
+            for item in provider.get_user_tweets(
+                user_name=handle,
+                max_items=max_items,
+            )
+            if isinstance(item, dict) and not is_no_results_item(item)
+        ][:max_items]
+        raw_tweets = _filter_recent_tweets(raw_tweets, max_tweet_age_days=max_tweet_age_days)
+        tweet_events = [normalize_tweet_item(item) for item in raw_tweets]
+        entity_key = f'x:{handle.lower()}'
+        tracking_state.record_entity(
+            entity_key=entity_key,
+            entity_type='x_handle',
+            display_name=handle,
+            source='x',
+            metadata_json=json.dumps({'handle': handle}, ensure_ascii=False),
+        )
+        event_count = 0
+        for event in tweet_events:
+            text = event.text or ''
+            symbols = _dedupe_preserve([*event.symbols, *_extract_cashtags(text)])
+            contracts = _dedupe_preserve([*event.contract_addresses, *_extract_pumpfun_contracts(text)])
+            urls = _dedupe_preserve(event.urls)
+            entities = _extract_handles(text)
+            event_type = _classify_entity_event(text, symbols=symbols, contracts=contracts, urls=urls)
+            tracking_state.record_entity_event(
+                entity_key=entity_key,
+                query=query,
+                event=event,
+                event_type=event_type,
+                symbols_json=json.dumps(symbols, ensure_ascii=False),
+                contracts_json=json.dumps(contracts, ensure_ascii=False),
+                urls_json=json.dumps(urls, ensure_ascii=False),
+                entities_json=json.dumps(entities, ensure_ascii=False),
+            )
+            event_count += 1
+        runs.append({'handle': handle, 'query': query, 'tweet_count': len(tweet_events), 'event_count': event_count})
+
+    return KolScanRunArtifacts(runs=runs)
 
 
 def rescan_tracked_tokens(*, tracking_db_path: Path, chain_id: str | None = None) -> dict[str, Any]:

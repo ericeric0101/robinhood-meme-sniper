@@ -1,0 +1,17 @@
+{
+  "name": "phase-d-kol-seed",
+  "notes": [
+    "KOL-first scanner seed list for ANSEM-style narrative discovery.",
+    "Use run-kol-scan to fetch recent posts/replies by account before deriving token-specific queries.",
+    "Keep max_items small during manual validation to control TwitterAPI.io credits."
+  ],
+  "primary_accounts": [
+    "blknoiz06"
+  ],
+  "secondary_accounts": [
+    "vladtenev",
+    "jiggacapital",
+    "DoxxedChannel",
+    "dexevents_miu"
+  ]
+}

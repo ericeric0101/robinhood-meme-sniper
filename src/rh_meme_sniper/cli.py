@@ -7,7 +7,7 @@ from typing_extensions import Annotated
 
 import typer
 
-from rh_meme_sniper.pipeline import run_alert_loop_from_payload, run_live_alert_loop, run_query_pack, run_discovery, rescan_tracked_tokens
+from rh_meme_sniper.pipeline import run_alert_loop_from_payload, run_live_alert_loop, run_query_pack, run_discovery, rescan_tracked_tokens, run_kol_scan
 from rh_meme_sniper.state import TrackingState
 from rh_meme_sniper.config import settings
 from rh_meme_sniper.sources.apify_client import ApifyAccessError
@@ -170,6 +170,34 @@ def run_discovery_command(
             state_db_path=state_db_path,
             alert_cooldown_seconds=alert_cooldown_seconds,
             tracking_db_path=tracking_db_path,
+        )
+    except (ApifyAccessError, TwitterAPIIOAccessError) as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(2) from exc
+
+    typer.echo(json.dumps({
+        "run_count": len(results.runs),
+        "runs": results.runs,
+    }, ensure_ascii=False, indent=2))
+
+
+@app.command("run-kol-scan")
+def run_kol_scan_command(
+    watchlist_path: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    tracking_db_path: Annotated[Path, typer.Option("--tracking-db-path")] = settings.tracking_db_path,
+    max_items: Annotated[int, typer.Option("--max-items", min=1)] = 5,
+    sort: Annotated[str, typer.Option("--sort")] = "Latest",
+    max_tweet_age_days: Annotated[int | None, typer.Option("--max-tweet-age-days", min=1)] = 14,
+    actor_id: Annotated[str | None, typer.Option("--actor-id")] = None,
+) -> None:
+    try:
+        results = run_kol_scan(
+            watchlist_path=watchlist_path,
+            tracking_db_path=tracking_db_path,
+            max_items=max_items,
+            sort=sort,
+            max_tweet_age_days=max_tweet_age_days,
+            actor_id=actor_id,
         )
     except (ApifyAccessError, TwitterAPIIOAccessError) as exc:
         typer.echo(str(exc))
