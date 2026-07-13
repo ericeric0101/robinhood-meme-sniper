@@ -326,12 +326,20 @@ What it records:
 - `tracked_entities`: durable handle/entity rows such as `x:blknoiz06`
 - `entity_events`: per-post signals including event type, cashtags, Pump.fun-style contracts, URLs, mentioned handles, raw text, and query
 
-Current D-1 extraction is intentionally conservative and alert-only:
-- `$SYMBOL` cashtags
-- EVM CAs from the existing parser
-- Pump.fun-style contracts ending in `pump`
-- mentioned handles
-- creator/narrative signal phrases such as `vibe check`, `stimmy`, `airdrop`, `creator fee`, `not me`, `community`, and `trench`
+Current D-2 event judging is deterministic and intentionally conservative. It classifies lifecycle event types before falling back to generic extraction classes:
+
+| Event type | Meaning |
+|---|---|
+| `tease` | vibe-check / soon / cooking style pre-token hints |
+| `denial` | KOL denies launch, affiliation, or ownership |
+| `identity_linked` | text links a person/entity/mascot/name to the token narrative |
+| `community_coordination` | community takeover, trench coordination, rally-around-one-CA language |
+| `fee_or_airdrop_catalyst` | creator-fee, stimmy, airdrop, holder rewards language |
+| `momentum_confirmation` | breaking out, volume, trending, ATH, sending language |
+| `exit_risk` | rug/scam/dev-dumped/do-not-buy/honeypot risk language |
+| `contract` / `cashtag` / `link` / `mention` | fallback classes when lifecycle rules do not match |
+
+The JSON summary includes `event_type_counts` per handle, which is the quick view for whether a watchlist run found denial, catalyst, exit-risk, or only generic mentions.
 
 This command does **not** auto-buy. It is the first layer for KOL/entity-first narrative memory; query packs remain useful for follow-up probes, backfill, and canonical CA verification.
 

@@ -1031,6 +1031,23 @@ def test_run_query_pack_records_tracking_state(monkeypatch, tmp_path):
     assert snapshots == [('0x020bfC650A365f8BB26819deAAbF3E21291018b4', 1000.0, 200.0)]
 
 
+def test_classify_entity_event_detects_phase_d_lifecycle_events():
+    from rh_meme_sniper.pipeline import _classify_entity_event
+
+    cases = [
+        ('vibe check $ANSEM', 'tease'),
+        ('not me, not my coin, I did not launch this', 'denial'),
+        ('creator fee will go back to holders, stimmy airdrop soon', 'fee_or_airdrop_catalyst'),
+        ('community takeover in the trenches, everyone is coordinating around one CA', 'community_coordination'),
+        ('@blknoiz06 is linked to $ANSEM narrative now', 'identity_linked'),
+        ('breaking out, volume ripping, trending everywhere', 'momentum_confirmation'),
+        ('dev dumped, rug risk, do not buy this scam', 'exit_risk'),
+    ]
+
+    for text, expected in cases:
+        assert _classify_entity_event(text, symbols=[], contracts=[], urls=[]) == expected
+
+
 def test_run_kol_scan_records_entity_events_from_watchlist_activity(tmp_path, monkeypatch):
     from rh_meme_sniper.pipeline import run_kol_scan
 
@@ -1074,6 +1091,7 @@ def test_run_kol_scan_records_entity_events_from_watchlist_activity(tmp_path, mo
             'query': 'from:blknoiz06',
             'tweet_count': 1,
             'event_count': 1,
+            'event_type_counts': {'fee_or_airdrop_catalyst': 1},
         }
     ]
     with sqlite3.connect(tracking_db_path) as conn:
@@ -1085,7 +1103,7 @@ def test_run_kol_scan_records_entity_events_from_watchlist_activity(tmp_path, mo
     assert entity == ('x:blknoiz06', 'x_handle', 'blknoiz06')
     assert event[0] == 'x:blknoiz06'
     assert event[1] == 'tweet-ansem-1'
-    assert event[2] == 'creator_signal'
+    assert event[2] == 'fee_or_airdrop_catalyst'
     assert json.loads(event[3]) == ['ANSEM']
     assert json.loads(event[4]) == ['9cRCn9rGT8V2imeM2BaKs13yhMEais3ruM3rPvTGpump']
     assert 'vibe check' in event[5]

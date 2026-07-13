@@ -55,10 +55,36 @@ class KolScanRunArtifacts:
 SYMBOL_RE = re.compile(r'(?<![A-Za-z0-9_])\$([A-Za-z][A-Za-z0-9_]{1,15})')
 PUMPFUN_ADDRESS_RE = re.compile(r'\b[1-9A-HJ-NP-Za-km-z]{32,44}pump\b')
 HANDLE_RE = re.compile(r'(?<![A-Za-z0-9_])@([A-Za-z0-9_]{2,20})')
-CREATOR_SIGNAL_TERMS = {
-    'vibe check', 'stimmy', 'airdrop', 'creator fee', 'linked', 'not me',
-    'not my coin', 'community', 'trench', 'trenches', 'pump.fun', 'pumpfun',
-}
+EVENT_RULES: list[tuple[str, tuple[str, ...]]] = [
+    (
+        'exit_risk',
+        ('rug', 'rugged', 'dumped', 'dev dumped', 'scam', 'do not buy', 'dont buy', "don't buy", 'honeypot'),
+    ),
+    (
+        'denial',
+        ('not me', 'not my coin', 'did not launch', "didn't launch", 'i did not launch', 'not affiliated', 'no affiliation'),
+    ),
+    (
+        'fee_or_airdrop_catalyst',
+        ('creator fee', 'fees back', 'fee back', 'airdrop', 'stimmy', 'claim', 'rewards to holders'),
+    ),
+    (
+        'community_coordination',
+        ('community takeover', 'cto', 'community', 'trenches', 'trench', 'coordinating', 'rally around'),
+    ),
+    (
+        'identity_linked',
+        ('linked to', 'identity', 'pfp', 'named after', 'for ansem', 'ansem coin', 'mascot'),
+    ),
+    (
+        'momentum_confirmation',
+        ('breaking out', 'ripping', 'trending', 'send it', 'sending', 'volume', 'new ath', 'ath'),
+    ),
+    (
+        'tease',
+        ('vibe check', 'soon', 'cooking', 'watch this', 'something coming', '👀'),
+    ),
+]
 
 
 def _slugify(value: str) -> str:
@@ -98,8 +124,9 @@ def _extract_handles(text: str | None) -> list[str]:
 
 def _classify_entity_event(text: str | None, *, symbols: list[str], contracts: list[str], urls: list[str]) -> str:
     lowered = (text or '').lower()
-    if any(term in lowered for term in CREATOR_SIGNAL_TERMS):
-        return 'creator_signal'
+    for event_type, terms in EVENT_RULES:
+        if any(term in lowered for term in terms):
+            return event_type
     if contracts:
         return 'contract'
     if symbols:
@@ -783,6 +810,7 @@ def run_kol_scan(
             metadata_json=json.dumps({'handle': handle}, ensure_ascii=False),
         )
         event_count = 0
+        event_type_counts: dict[str, int] = {}
         for event in tweet_events:
             text = event.text or ''
             symbols = _dedupe_preserve([*event.symbols, *_extract_cashtags(text)])
@@ -800,8 +828,15 @@ def run_kol_scan(
                 urls_json=json.dumps(urls, ensure_ascii=False),
                 entities_json=json.dumps(entities, ensure_ascii=False),
             )
+            event_type_counts[event_type] = event_type_counts.get(event_type, 0) + 1
             event_count += 1
-        runs.append({'handle': handle, 'query': query, 'tweet_count': len(tweet_events), 'event_count': event_count})
+        runs.append({
+            'handle': handle,
+            'query': query,
+            'tweet_count': len(tweet_events),
+            'event_count': event_count,
+            'event_type_counts': event_type_counts,
+        })
 
     return KolScanRunArtifacts(runs=runs)
 
